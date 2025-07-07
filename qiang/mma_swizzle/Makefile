@@ -1,0 +1,21 @@
+#Todo: register layout debug
+test_wmma_fp16_16_16_16_fp16_asm: test_wmma_fp16_16_16_16_fp16_asm.cpp
+	hipcc --offload-arch=gfx1101 -o test_wmma_fp16_16_16_16_fp16_asm test_wmma_fp16_16_16_16_fp16_asm.cpp
+
+test_wmma_fp16_16_16_16_fp16_buildin: test_wmma_fp16_16_16_16_fp16_buildin.cpp
+	hipcc --offload-arch=gfx1101 -o test_wmma_fp16_16_16_16_fp16_buildin test_wmma_fp16_16_16_16_fp16_buildin.cpp
+#Todo: register layout check
+test_wmma_fp32_16_16_16_fp16_buildin: test_wmma_fp32_16_16_16_fp16_buildin.cpp
+	hipcc --offload-arch=gfx1101 -o test_wmma_fp32_16_16_16_fp16_buildin test_wmma_fp32_16_16_16_fp16_buildin.cpp
+
+clean:
+	rm -f test_wmma_fp16_16_16_16_fp16_asm test_wmma_fp16_16_16_16_fp16_buildin test_wmma_fp32_16_16_16_fp16_buildin
+
+run_asm_fp16_fp16: test_wmma_fp16_16_16_16_fp16_asm
+	./test_wmma_fp16_16_16_16_fp16_asm
+
+run_buildin_fp16_fp16: test_wmma_fp16_16_16_16_fp16_buildin
+	./test_wmma_fp16_16_16_16_fp16_buildin
+
+run_buildin_fp32_fp16: test_wmma_fp32_16_16_16_fp16_buildin
+	./test_wmma_fp32_16_16_16_fp16_buildin
