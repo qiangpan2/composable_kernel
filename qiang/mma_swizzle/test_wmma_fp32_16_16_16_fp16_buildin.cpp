@@ -58,6 +58,18 @@ int main(int argc, char* argv[])
     __half b[16 * 16] = {};
     __half c[16 * 16] = {};
     __half *a_gpu, *b_gpu, *c_gpu;
+    int device;
+    hipGetDevice(&device);
+    std::cout << "Current HIP device: " << device << std::endl;
+
+    int count = 0;
+    hipGetDeviceCount(&count);
+    for (int i = 0; i < count; ++i) {
+        hipDeviceProp_t prop;
+        hipGetDeviceProperties(&prop, i);
+        std::cout << "HIP device " << i << ": " << prop.name << std::endl;
+    }
+    std::cout << "-------------------- "<<std::endl;
     hipMalloc(&a_gpu, 16*16 * sizeof(__half));
     hipMalloc(&b_gpu, 16*16 * sizeof(__half));
     hipMalloc(&c_gpu, 16*16 * sizeof(__half));
