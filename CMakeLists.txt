@@ -710,6 +710,12 @@ write_basic_package_version_file(
     COMPATIBILITY AnyNewerVersion
 )
 
+# Configure and install CK Tile Targets file
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/composable_kernelck_tileTargets.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/composable_kernelck_tileTargets.cmake"
+    @ONLY
+)
+
 configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in
     "${CMAKE_CURRENT_BINARY_DIR}/composable_kernelConfig.cmake"
     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/composable_kernel
@@ -719,6 +725,7 @@ configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in
 rocm_install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/composable_kernelConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/composable_kernelConfigVersion.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/composable_kernelck_tileTargets.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/composable_kernel
 )
 

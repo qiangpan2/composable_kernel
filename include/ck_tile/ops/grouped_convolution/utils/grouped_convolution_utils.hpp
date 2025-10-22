@@ -5,6 +5,7 @@
 
 #include "ck_tile/core.hpp"
 #include "ck_tile/host/convolution_parameter.hpp"
+#include "ck_tile/ops/gemm/pipeline/tile_gemm_traits.hpp"
 
 namespace ck_tile {
 
