@@ -1,7 +1,8 @@
 # for isystem in miopen  https://rocm.docs.amd.com/en/latest/reference/gpu-arch-specs.html
 cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
-    -DGPU_ARCHS="gfx1100" \
+    -DGPU_ARCHS="gfx1201" \
+    -DCK_USE_XDL=ON \
     -DCK_TILE_USE_WMMA=ON \
     -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ \
     -DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang \
