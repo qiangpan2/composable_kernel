@@ -1,0 +1,8 @@
+# CK Tile component for composable_kernel
+# This is a header-only component that only provides include directories
+
+# Set the include directory for CK Tile
+set(composable_kernel_ck_tile_INCLUDE_DIRS "${PACKAGE_PREFIX_DIR}/include/ck_tile")
+
+# Mark the component as found
+set(composable_kernel_ck_tile_FOUND TRUE)
