@@ -1,26 +1,28 @@
 # for isystem in miopen  https://rocm.docs.amd.com/en/latest/reference/gpu-arch-specs.html
-cmake -B build \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DGPU_ARCHS="gfx1100" \
-    -DCK_TILE_USE_WMMA=ON \
-    -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ \
-    -DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang \
-    -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ \
-    -DCMAKE_CXX_FLAGS="-Wno-gnu-line-marker" \
-    -DCMAKE_C_FLAGS="-Wno-gnu-line-marker" \
-    -DCMAKE_INSTALL_PREFIX=/opt/rocm \
-    -G Ninja > build.log 2>&1
-#DEPS_PREFIX="${HOME}/miopen-deps"
 # cmake -B build \
 #     -DCMAKE_BUILD_TYPE=Release \
-#     -DGPU_TARGETS="gfx1100" \
+#     -DGPU_ARCHS="gfx1101" \
+#     -DCK_USE_XDL=ON \
 #     -DCK_TILE_USE_WMMA=ON \
 #     -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ \
 #     -DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang \
 #     -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ \
-#     -DCMAKE_INSTALL_PREFIX=${DEPS_PREFIX} \
+#     -DCMAKE_CXX_FLAGS="-Wno-gnu-line-marker" \
+#     -DCMAKE_C_FLAGS="-Wno-gnu-line-marker" \
+#     -DCMAKE_INSTALL_PREFIX=/opt/rocm \
 #     -G Ninja > build.log 2>&1
-cmake --build build --target install -j128
+DEPS_PREFIX="${HOME}/miopen-deps"
+cmake -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DGPU_TARGETS="gfx1100;gfx1201" \
+    -DCK_TILE_USE_WMMA=ON \
+    -DCMAKE_HIP_COMPILER=/opt/rocm/llvm/bin/clang++ \
+    -DCMAKE_C_COMPILER=/opt/rocm/llvm/bin/clang \
+    -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ \
+    -DCMAKE_INSTALL_PREFIX=${DEPS_PREFIX} \
+    -G Ninja > config.log 2>&1
+cmake --build build > build.log 2>&1
+cmake --install build
 
 ninja tile_example_grouped_conv_fwd
 
