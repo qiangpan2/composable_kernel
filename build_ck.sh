@@ -26,12 +26,26 @@ cmake --install build
 
 ninja tile_example_grouped_conv_fwd
 
-echo "Running grouped convolution forward example..."
+
 ./bin/tile_example_grouped_conv_fwd -n=1 -c=16 -d=5 -h=104 -w=60 -k=16 -z=1 -y=1 -x=1 -stride_d=1 -stride_h=1 -stride_w=1 -dilation_d=1 -dilation_h=1 -dilation_w=1 -lpad_d=0 -lpad_h=0 -lpad_w=0 -rpad_d=0 -rpad_h=0 -rpad_w=0 -g=1 -in_layout=NDHWGC -wei_layout=GKZYXC -out_layout=NDHWGK -prec=fp16 -v=1
 
+
+#MIOpenDriver convbfp16 -n 1 -c 1024 --in_d 1 -H 272 -W 200 -k 512 --fil_d 1 -y 1 -x 1 --pad_d 0 -p 0 -q 0 --conv_stride_d 1 -u 1 -v 1 --dilation_d 1 -l 1 -j 1 --spatial_dim 3 --in_layout NDHWC --fil_layout NDHWC --out_layout NDHWC -m conv -g 1 -F 1 -t 1 -V 0 > convbfp16_hang.log 2>&1
+
+./bin/tile_example_grouped_conv_fwd -n=1 -c=1024 -d=1 -h=272 -w=200 -k=512 -z=1 -y=1 -x=1 -stride_d=1 -stride_h=1 -stride_w=1 -dilation_d=1 -dilation_h=1 -dilation_w=1 -lpad_d=0 -lpad_h=0 -lpad_w=0 -rpad_d=0 -rpad_h=0 -rpad_w=0 -g=1 -in_layout=NDHWGC -wei_layout=GKZYXC -out_layout=NDHWGK -prec=bf16 -v=1
 
 #2D conv case for test
 echo "Running new grouped convolution example (N=1, H=256, W=512, C=3, 5x5 kernel)..."
 ./bin/tile_example_grouped_conv_fwd -n=1 -c=3 -d=1 -h=256 -w=512 -k=16 -z=1 -y=5 -x=5 -stride_d=1 -stride_h=1 -stride_w=1 -dilation_d=1 -dilation_h=1 -dilation_w=1 -lpad_d=0 -lpad_h=2 -lpad_w=2 -rpad_d=0 -rpad_h=2 -rpad_w=2 -g=1 -in_layout=NDHWGC -wei_layout=GKZYXC -out_layout=NDHWGK -prec=fp16 -v=1
 
 
+#FMHA
+cd example/ck_tile/01_fmha
+python generate.py \
+    --targets gfx1201 \
+    --api fwd \
+    --output_dir ./generated_kernels \
+    --receipt 1 \
+    --optdim 64,128
+
+ls -la generated_kernels/
