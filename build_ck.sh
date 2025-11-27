@@ -21,7 +21,7 @@ cmake -B build \
     -DCMAKE_CXX_COMPILER=/opt/rocm/llvm/bin/clang++ \
     -DCMAKE_INSTALL_PREFIX=${DEPS_PREFIX} \
     -G Ninja > config.log 2>&1
-cmake --build build > build.log 2>&1
+cmake --build build -j 120 > build.log 2>&1
 cmake --install build
 
 ninja tile_example_grouped_conv_fwd
