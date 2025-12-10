@@ -76,7 +76,8 @@ struct tile_window_linear
         template <index_t I>
         static constexpr index_t compute_non_linear_access_recursive()
         {
-            constexpr auto sfc_access_lens = Base::Traits::SFC_Ys::access_lengths;
+            using SFC_Ys_t = typename Base::Traits::SFC_Ys;
+            constexpr auto sfc_access_lens = SFC_Ys_t::access_lengths;
             using ys_to_rhs_major =
                 typename decltype(typename Base::TileDstr{}
                                       .get_static_tile_distribution_encoding())::Ys2RHsMajor;
@@ -118,7 +119,8 @@ struct tile_window_linear
         //  -> prefixsum : seqneuce<0, 2, 4, 6, 8>
         static constexpr auto get_non_linear_access_map()
         {
-            constexpr auto sfc_access_lens = Base::Traits::SFC_Ys::access_lengths;
+            using SFC_Ys_t = typename Base::Traits::SFC_Ys;
+            constexpr auto sfc_access_lens = SFC_Ys_t::access_lengths;
             using ys_to_rhs_major =
                 typename decltype(typename Base::TileDstr{}
                                       .get_static_tile_distribution_encoding())::Ys2RHsMajor;
