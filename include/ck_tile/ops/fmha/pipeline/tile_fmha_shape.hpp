@@ -128,16 +128,21 @@ struct TileFmhaBwdShape
 template <index_t Hdim>
 struct TileFmhaShape_Wmma
 {
-    // M0=64, N0=32, K0=32, N1=32, K1=32, K0max=64
-    // - Reduced M0 from 128 to 64 to fit within shared memory constraints
-    // - K0=32 ensures k0_loops=1 (K0/warpsize = 32/32 = 1)
-    // - N1=32 reduces shared memory usage
-    // - Smaller tiles fit within limited shared memory on RDNA3
+    // Current: M0=48, N0=32, K0=32, N1=16, K1=16, K0max=64 
+    // - M0=48: Balanced between performance and stability (avoids edge cases)
+    // - K0=32: Ensures k0_loops=1 (K0/warpsize = 32/32 = 1)
+    // - N1=16, K1=16: Reduced to simplify V descriptor layout and avoid 0-dim issues
+    // - Shared memory: ~9KB (well within RDNA3 limits)
     // - WarpGemmNumAccess=Single because WMMA only supports Single mode
-    using BlockTile       = sequence<64, 32, 32, 32, 32, Hdim>;
+    //
+    // Alternative configurations if needed:
+    // Option 1 (More conservative): sequence<32, 32, 32, 32, 32, Hdim> - 12KB
+    // Option 2 (Lower warps): sequence<64, 32, 32, 32, 32, Hdim> with Warps=2 - 12KB
+    // Option 3 (Ultra safe): sequence<32, 16, 16, 16, 16, Hdim> with Warps=2 - 3KB
+    using BlockTile       = sequence<48, 32, 32, 16, 16, Hdim>;
     using WarpGemmShape   = sequence<16, 16, 16>;
-    using Gemm0BlockWarps = sequence<4, 1, 1>;  // Reduced from 8 to 4 warps
-    using Gemm1BlockWarps = sequence<4, 1, 1>;  // Reduced from 8 to 4 warps
+    using Gemm0BlockWarps = sequence<4, 1, 1>;
+    using Gemm1BlockWarps = sequence<4, 1, 1>;
     
     using Type = TileFmhaShape<BlockTile,
                                Gemm0BlockWarps,
