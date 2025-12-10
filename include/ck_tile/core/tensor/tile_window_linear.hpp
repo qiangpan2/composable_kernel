@@ -98,32 +98,9 @@ struct tile_window_linear
 
         static constexpr auto get_num_non_linear_access()
         {
-#if defined(__gfx11__) || defined(__gfx12__)
-            // For RDNA3 (gfx11/gfx12) with WMMA, use template recursion
-            // to avoid constexpr evaluation issues with complex types (e.g., bf16_t)
+            // Use template recursion for all architectures
+            // This is more constexpr-friendly, especially for complex types like bf16_t
             return compute_non_linear_access_recursive<0>();
-#else
-            // For other architectures (CDNA/MFMA), keep the original logic
-            constexpr auto sfc_access_lens = Base::Traits::SFC_Ys::access_lengths;
-            using ys_to_rhs_major =
-                typename decltype(typename Base::TileDstr{}
-                                      .get_static_tile_distribution_encoding())::Ys2RHsMajor;
-
-            constexpr auto non_linear = [&]() {
-                index_t cnt = 1;
-                static_for<0, Base::NDimY, 1>{}([&](auto i_dim_y) {
-                    constexpr auto rhs_major    = ys_to_rhs_major{}[i_dim_y];
-                    constexpr auto target_h_dim = number<rhs_major - 1>{}; // no r dim here!
-                    if constexpr(LinearBottomDims{}[target_h_dim] == 0)
-                    {
-                        cnt *= sfc_access_lens[i_dim_y];
-                    }
-                });
-                return cnt;
-            }();
-
-            return non_linear;
-#endif
         }
 
         // example:
