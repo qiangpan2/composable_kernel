@@ -30,7 +30,8 @@ template <typename BlockTile_, // sequence<...
           typename Gemm0WarpTile_,
           typename Gemm1BlockWarps_,
           typename Gemm1WarpTile_,
-          bool IsVLayoutRowMajor_>
+          bool IsVLayoutRowMajor_,
+          WGAttrNumAccessEnum WarpGemmNumAccess_ = WGAttrNumAccessEnum::Double>
 struct TileFmhaShape
 {
     using BlockTile       = remove_cvref_t<BlockTile_>;
@@ -64,6 +65,9 @@ struct TileFmhaShape
     using VLayout                           = std::conditional_t<IsVLayoutRowMajor,
                                                                  ck_tile::tensor_layout::gemm::RowMajor,
                                                                  ck_tile::tensor_layout::gemm::ColumnMajor>;
+    
+    // WarpGemm access mode (Single or Double) - WMMA only supports Single
+    static constexpr WGAttrNumAccessEnum kWarpGemmNumAccess = WarpGemmNumAccess_;
 };
 
 template <typename BlockTile_, // sequence<...
@@ -124,21 +128,24 @@ struct TileFmhaBwdShape
 template <index_t Hdim>
 struct TileFmhaShape_Wmma
 {
-    // M0=128, N0=32, K0=32, N1=32, K1=32, K0max=64
+    // M0=64, N0=32, K0=32, N1=32, K1=32, K0max=64
+    // - Reduced M0 from 128 to 64 to fit within shared memory constraints
     // - K0=32 ensures k0_loops=1 (K0/warpsize = 32/32 = 1)
     // - N1=32 reduces shared memory usage
-    // - Smaller tiles fit within limited shared memory
-    using BlockTile       = sequence<128, 32, 32, 32, 32, Hdim>;
+    // - Smaller tiles fit within limited shared memory on RDNA3
+    // - WarpGemmNumAccess=Single because WMMA only supports Single mode
+    using BlockTile       = sequence<64, 32, 32, 32, 32, Hdim>;
     using WarpGemmShape   = sequence<16, 16, 16>;
-    using Gemm0BlockWarps = sequence<8, 1, 1>;
-    using Gemm1BlockWarps = sequence<8, 1, 1>;
+    using Gemm0BlockWarps = sequence<4, 1, 1>;  // Reduced from 8 to 4 warps
+    using Gemm1BlockWarps = sequence<4, 1, 1>;  // Reduced from 8 to 4 warps
     
     using Type = TileFmhaShape<BlockTile,
                                Gemm0BlockWarps,
                                WarpGemmShape,
                                Gemm1BlockWarps,
                                WarpGemmShape,
-                               true>; // IsVLayoutRowMajor
+                               true,  // IsVLayoutRowMajor
+                               WGAttrNumAccessEnum::Single>; // WMMA only supports Single
 };
 
 } // namespace ck_tile

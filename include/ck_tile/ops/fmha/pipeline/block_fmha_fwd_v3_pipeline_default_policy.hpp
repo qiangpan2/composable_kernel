@@ -286,6 +286,8 @@ struct BlockFmhaV3PipelineDefaultPolicy
                                            typename Problem::BlockFmhaShape::Gemm1WarpTile>>;
         /// NOTICE: in order to use load_tile_transpose() later for V tiles, we have to pass
         /// WGAttrNumAccessEnum::Double instead of WGAttrNumAccessEnum::Single
+        /// However, for gfx11/gfx12 (RDNA3), only Single is supported with WMMA
+        /// The access mode is now configured in TileFmhaShape::kWarpGemmNumAccess
         using WarpGemm = WarpGemmDispatcher<typename Problem::PDataType,
                                             typename Problem::VDataType,
                                             typename Problem::OaccDataType,
@@ -295,7 +297,7 @@ struct BlockFmhaV3PipelineDefaultPolicy
                                             true,
                                             false,
                                             false,
-                                            WGAttrNumAccessEnum::Double>;
+                                            Problem::BlockFmhaShape::kWarpGemmNumAccess>;
 
         using BlockGemmPolicy =
             BlockGemmARegBRegCRegV2CustomPolicy<typename Problem::PDataType,
