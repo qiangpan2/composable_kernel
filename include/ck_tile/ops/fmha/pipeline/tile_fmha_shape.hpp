@@ -119,5 +119,26 @@ struct TileFmhaBwdShape
     static_assert(kMaxSeqLenQ == kM0 || kMaxSeqLenQ == 0,
                   "kMaxSeqLenQ should be equal to kM0 or 0, if 0, it means seq len Q is unlimited");
 };
+// WMMA-optimized shape (warpsize=32)
+// Optimized tile sizes for WMMA instructions on architectures like RDNA3 (gfx1100, gfx1201)
+template <index_t Hdim>
+struct TileFmhaShape_Wmma
+{
+    // M0=128, N0=32, K0=32, N1=32, K1=32, K0max=64
+    // - K0=32 ensures k0_loops=1 (K0/warpsize = 32/32 = 1)
+    // - N1=32 reduces shared memory usage
+    // - Smaller tiles fit within limited shared memory
+    using BlockTile       = sequence<128, 32, 32, 32, 32, Hdim>;
+    using WarpGemmShape   = sequence<16, 16, 16>;
+    using Gemm0BlockWarps = sequence<8, 1, 1>;
+    using Gemm1BlockWarps = sequence<8, 1, 1>;
+    
+    using Type = TileFmhaShape<BlockTile,
+                               Gemm0BlockWarps,
+                               WarpGemmShape,
+                               Gemm1BlockWarps,
+                               WarpGemmShape,
+                               true>; // IsVLayoutRowMajor
+};
 
 } // namespace ck_tile
