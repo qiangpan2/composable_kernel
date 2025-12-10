@@ -71,8 +71,39 @@ struct tile_window_linear
     struct traits
     {
         private:
+        // Helper template for compile-time computation of non-linear access count (WMMA/gfx11/gfx12 only)
+        // This version uses template recursion which is more constexpr-friendly for complex types like bf16_t
+        template <index_t I>
+        static constexpr index_t compute_non_linear_access_recursive()
+        {
+            constexpr auto sfc_access_lens = Base::Traits::SFC_Ys::access_lengths;
+            using ys_to_rhs_major =
+                typename decltype(typename Base::TileDstr{}
+                                      .get_static_tile_distribution_encoding())::Ys2RHsMajor;
+            
+            if constexpr(I >= Base::NDimY)
+            {
+                return 1;
+            }
+            else
+            {
+                constexpr auto rhs_major    = ys_to_rhs_major{}[number<I>{}];
+                constexpr auto target_h_dim = number<rhs_major - 1>{};
+                constexpr index_t factor = (LinearBottomDims{}[target_h_dim] == 0) 
+                                           ? sfc_access_lens[number<I>{}]
+                                           : 1;
+                return factor * compute_non_linear_access_recursive<I + 1>();
+            }
+        }
+
         static constexpr auto get_num_non_linear_access()
         {
+#if defined(__gfx11__) || defined(__gfx12__)
+            // For RDNA3 (gfx11/gfx12) with WMMA, use template recursion
+            // to avoid constexpr evaluation issues with complex types (e.g., bf16_t)
+            return compute_non_linear_access_recursive<0>();
+#else
+            // For other architectures (CDNA/MFMA), keep the original logic
             constexpr auto sfc_access_lens = Base::Traits::SFC_Ys::access_lengths;
             using ys_to_rhs_major =
                 typename decltype(typename Base::TileDstr{}
@@ -92,6 +123,7 @@ struct tile_window_linear
             }();
 
             return non_linear;
+#endif
         }
 
         // example:
