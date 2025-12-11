@@ -128,21 +128,20 @@ struct TileFmhaBwdShape
 template <index_t Hdim>
 struct TileFmhaShape_Wmma
 {
-    // Current: M0=48, N0=32, K0=32, N1=16, K1=16, K0max=64 
-    // - M0=48: Balanced between performance and stability (avoids edge cases)
-    // - K0=32: Ensures k0_loops=1 (K0/warpsize = 32/32 = 1)
-    // - N1=16, K1=16: Reduced to simplify V descriptor layout and avoid 0-dim issues
-    // - Shared memory: ~9KB (well within RDNA3 limits)
+    // Fixed: Use Option 1 (More conservative) to avoid zero-dimension issue in tile distribution
+    // M0=32, N0=32, K0=32, N1=32, K1=32, K0max=Hdim
+    // - Balanced tile sizes avoid edge cases in tensor descriptor transformations
+    // - sequence<2, 2, 1> warp arrangement is more balanced than sequence<4, 1, 1>
+    //   and avoids the zero-dimension bug in tile_window_base.hpp space_filling_curve
+    // - Shared memory: ~12KB 
     // - WarpGemmNumAccess=Single because WMMA only supports Single mode
     //
-    // Alternative configurations if needed:
-    // Option 1 (More conservative): sequence<32, 32, 32, 32, 32, Hdim> - 12KB
-    // Option 2 (Lower warps): sequence<64, 32, 32, 32, 32, Hdim> with Warps=2 - 12KB
-    // Option 3 (Ultra safe): sequence<32, 16, 16, 16, 16, Hdim> with Warps=2 - 3KB
-    using BlockTile       = sequence<48, 32, 32, 16, 16, Hdim>;
+    // Previous config caused: sequence<0, 2, 8> in space_filling_curve (TensorSize=0 error)
+    // Root cause: sequence<4, 1, 1> warp layout with unmerge operations created 0-sized dimension
+    using BlockTile       = sequence<32, 32, 32, 32, 32, Hdim>;
     using WarpGemmShape   = sequence<16, 16, 16>;
-    using Gemm0BlockWarps = sequence<4, 1, 1>;
-    using Gemm1BlockWarps = sequence<4, 1, 1>;
+    using Gemm0BlockWarps = sequence<2, 2, 1>;
+    using Gemm1BlockWarps = sequence<2, 2, 1>;
     
     using Type = TileFmhaShape<BlockTile,
                                Gemm0BlockWarps,
