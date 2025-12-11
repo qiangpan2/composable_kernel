@@ -128,16 +128,17 @@ struct TileFmhaBwdShape
 template <index_t Hdim>
 struct TileFmhaShape_Wmma
 {
-    // Fixed: Use Option 1 (More conservative) to avoid zero-dimension issue in tile distribution
+    // WMMA configuration for gfx11/gfx12 (RDNA3)
     // M0=32, N0=32, K0=32, N1=32, K1=32, K0max=Hdim
-    // - Balanced tile sizes avoid edge cases in tensor descriptor transformations
-    // - sequence<2, 2, 1> warp arrangement is more balanced than sequence<4, 1, 1>
-    //   and avoids the zero-dimension bug in tile_window_base.hpp space_filling_curve
-    // - Shared memory: ~12KB 
+    // - Balanced tile sizes (32x32) avoid tensor distribution edge cases
+    // - sequence<2, 2, 1> warp arrangement is well-balanced for warpsize=32
+    // - ColumnMajor V layout (IsVLayoutRowMajor=false) avoids transpose operation
+    //   which is incompatible with WMMA tile distributions
+    // - Shared memory: ~12KB (well within RDNA3 64KB limit)
     // - WarpGemmNumAccess=Single because WMMA only supports Single mode
     //
-    // Previous config caused: sequence<0, 2, 8> in space_filling_curve (TensorSize=0 error)
-    // Root cause: sequence<4, 1, 1> warp layout with unmerge operations created 0-sized dimension
+    // Note: RowMajor V layout causes transpose validation failures because
+    // WMMA tile distributions don't match the Quad16/Quad8 patterns required
     using BlockTile       = sequence<32, 32, 32, 32, 32, Hdim>;
     using WarpGemmShape   = sequence<16, 16, 16>;
     using Gemm0BlockWarps = sequence<2, 2, 1>;
@@ -148,7 +149,7 @@ struct TileFmhaShape_Wmma
                                WarpGemmShape,
                                Gemm1BlockWarps,
                                WarpGemmShape,
-                               true,  // IsVLayoutRowMajor
+                               false,  // IsVLayoutRowMajor - use ColumnMajor to avoid transpose
                                WGAttrNumAccessEnum::Single>; // WMMA only supports Single
 };
 
