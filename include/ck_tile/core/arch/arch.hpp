@@ -65,7 +65,9 @@ CK_TILE_HOST_DEVICE constexpr index_t get_warp_size()
 #if defined(__GFX9__)
     // CDNA architectures (gfx908, gfx90a, gfx940, gfx941, gfx942) use warp size 64
     return 64;
-#elif defined(__gfx11__) || defined(__gfx12__) || defined(__GFX11__) || defined(__GFX12__)
+#elif defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__) || \
+      defined(__gfx1200__) || defined(__gfx1201__) || \
+      defined(__gfx11__) || defined(__gfx12__) || defined(__GFX11__) || defined(__GFX12__)
     // RDNA3+ architectures (gfx1100, gfx1101, gfx1102, gfx1103, gfx1201) use warp size 32
     return 32;
 #elif !defined(__HIP_DEVICE_COMPILE__)
