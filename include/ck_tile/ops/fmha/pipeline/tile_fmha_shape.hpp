@@ -150,7 +150,7 @@ struct TileFmhaShape_Wmma
     // - NumWarpGroups = 128 / 64 = 2 ✓
     // 
     // - WarpGemmShape: <16, 16, 16> for WMMA 16x16x16
-    // - ColumnMajor V layout (IsVLayoutRowMajor=false) avoids transpose
+    // - RowMajor V layout (IsVLayoutRowMajor=true) with custom distribution in WMMA policy
     // - Shared memory: ~32KB (well within RDNA3 64KB limit)
     using BlockTile       = sequence<64, 64, Hdim, 64, Hdim, Hdim>;
     using WarpGemmShape   = sequence<16, 16, 16>;
@@ -162,7 +162,7 @@ struct TileFmhaShape_Wmma
                                WarpGemmShape,
                                Gemm1BlockWarps,
                                WarpGemmShape,
-                               true,  // IsVLayoutRowMajor - use ColumnMajor to avoid transpose
+                               true,  // IsVLayoutRowMajor - Set to true for RowMajor V layout
                                WGAttrNumAccessEnum::Single>; // WMMA only supports Single
 };
 
