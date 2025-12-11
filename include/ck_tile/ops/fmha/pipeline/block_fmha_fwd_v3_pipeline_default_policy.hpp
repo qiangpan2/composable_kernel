@@ -214,13 +214,23 @@ struct BlockFmhaV3PipelineDefaultPolicy
         constexpr auto v_block_dstr_encode = ck_tile::detail::make_embed_tile_distribution_encoding(
             v_block_outer_dstr_encoding, typename WarpGemm::BWarpDstrEncoding{});
 
-        // compute the endcoding before transpose
-        constexpr auto v_block_dstr =
-            make_static_tile_distribution(typename InputTileDistributionTraits<
-                                          decltype(v_block_dstr_encode),
-                                          typename Problem::VDataType>::TransposedDstrEncode{});
-
-        return v_block_dstr;
+        // Check V layout: only apply transpose for RowMajor (IsVLayoutRowMajor=true)
+        // For ColumnMajor (IsVLayoutRowMajor=false), use encoding directly without transpose
+        if constexpr(Problem::BlockFmhaShape::IsVLayoutRowMajor)
+        {
+            // RowMajor V: needs transpose for BWarpDstrEncoding
+            constexpr auto v_block_dstr =
+                make_static_tile_distribution(typename InputTileDistributionTraits<
+                                              decltype(v_block_dstr_encode),
+                                              typename Problem::VDataType>::TransposedDstrEncode{});
+            return v_block_dstr;
+        }
+        else
+        {
+            // ColumnMajor V: no transpose needed, use encoding directly
+            constexpr auto v_block_dstr = make_static_tile_distribution(v_block_dstr_encode);
+            return v_block_dstr;
+        }
     }
 
     template <typename Problem>
