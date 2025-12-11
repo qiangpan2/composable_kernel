@@ -62,9 +62,18 @@ enum struct memory_operation_enum : std::uint16_t
 
 CK_TILE_HOST_DEVICE constexpr index_t get_warp_size()
 {
-#if defined(__GFX9__) || !defined(__HIP_DEVICE_COMPILE__)
+#if defined(__GFX9__)
+    // CDNA architectures (gfx908, gfx90a, gfx940, gfx941, gfx942) use warp size 64
+    return 64;
+#elif defined(__gfx11__) || defined(__gfx12__) || defined(__GFX11__) || defined(__GFX12__)
+    // RDNA3+ architectures (gfx1100, gfx1101, gfx1102, gfx1103, gfx1201) use warp size 32
+    return 32;
+#elif !defined(__HIP_DEVICE_COMPILE__)
+    // Host compilation: default to 64 for compatibility
+    // Note: This should ideally match the target architecture
     return 64;
 #else
+    // Other GPU architectures: default to 32
     return 32;
 #endif
 }
