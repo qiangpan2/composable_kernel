@@ -128,21 +128,34 @@ struct TileFmhaBwdShape
 template <index_t Hdim>
 struct TileFmhaShape_Wmma
 {
-    // WMMA configuration for gfx11/gfx12 
-    // M0=64, N0=64, K0=16, N1=64, K1=16, K0max=Hdim  
-    // - Larger tile sizes with simpler warp layout avoid tensor distribution edge cases
-    // - sequence<2, 1, 1> warp arrangement avoids complex unmerge operations that
-    //   create zero-sized dimensions in tile distribution encoding
-    // - ColumnMajor V layout (IsVLayoutRowMajor=false) avoids transpose operation
-    // - Shared memory: ~16KB (well within RDNA3 64KB limit)
-    // - WarpGemmNumAccess=Single because WMMA only supports Single mode
+    // WMMA configuration for gfx11/gfx12 - V3 Pipeline Requirements
+    // M0=64, N0=64, K0=64, N1=64, K1=64, K0max=Hdim
+    // 
+    // V3 Pipeline Constraints:
+    // - k0_loops = kQKHeaddim / kK0 must == 1, so kK0 must equal Hdim (64)
+    // - k1_loops = kN0 / kK1 must == 1, so kK1 must equal kN0 (64)
+    // - kN0 == kK1 (both 64)
+    // - NumWarpGroups == 2 (BlockSize / NumThreadPerWarpGroup == 2)
     //
-    // Why this works: Simpler warp layout with 2 warps in M-dimension only
-    // avoids the problematic unmerge<tuple<constant<0>, ...>> operations
-    using BlockTile       = sequence<64, 64, 16, 64, 16, Hdim>;
+    // Configuration for WMMA architectures (warp size=32) with custom policy:
+    // - BlockTile: <64, 64, 64, 64, 64, 64> satisfies all v3 constraints:
+    //   * kK0 = Hdim (64) → k0_loops = 64/64 = 1 ✓
+    //   * kK1 = Hdim (64), kN0 = 64 → k1_loops = 64/64 = 1 ✓
+    //   * kN0 == kK1 (both 64) ✓
+    // 
+    // - Custom WMMA policy has NumThreadPerWarpGroup = 2 * 32 = 64 threads per group
+    // - Need NumWarpGroups = 2, so BlockSize = 2 * 64 = 128 threads
+    // - This requires 128/32 = 4 warps total
+    // - Gemm0BlockWarps: <2, 2, 1> gives 4 warps (2*2*1 = 4)
+    // - NumWarpGroups = 128 / 64 = 2 ✓
+    // 
+    // - WarpGemmShape: <16, 16, 16> for WMMA 16x16x16
+    // - ColumnMajor V layout (IsVLayoutRowMajor=false) avoids transpose
+    // - Shared memory: ~32KB (well within RDNA3 64KB limit)
+    using BlockTile       = sequence<64, 64, Hdim, 64, Hdim, Hdim>;
     using WarpGemmShape   = sequence<16, 16, 16>;
-    using Gemm0BlockWarps = sequence<2, 1, 1>;
-    using Gemm1BlockWarps = sequence<2, 1, 1>;
+    using Gemm0BlockWarps = sequence<2, 2, 1>;
+    using Gemm1BlockWarps = sequence<2, 2, 1>;
     
     using Type = TileFmhaShape<BlockTile,
                                Gemm0BlockWarps,

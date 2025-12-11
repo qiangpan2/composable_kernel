@@ -441,7 +441,11 @@ struct BlockFmhaFwdV3Pipeline
         [[maybe_unused]] auto m_lds_window =
             make_tile_window(m_lds, make_tuple(number<kM0>{}), {0});
 
-        const index_t warp_group_id = get_warp_id() / 4;
+        // Calculate number of warps per group from policy
+        // For WMMA (warp_size=32): NumThreadPerWarpGroup=64 → NumWarpPerGroup=2
+        // For CDNA (warp_size=64): NumThreadPerWarpGroup=256 → NumWarpPerGroup=4
+        constexpr index_t NumWarpPerGroup = Policy::NumThreadPerWarpGroup / get_warp_size();
+        const index_t warp_group_id = get_warp_id() / NumWarpPerGroup;
 
         // Block GEMM
         constexpr auto gemm_0 = Policy::template GetQKBlockGemm<Problem>();
