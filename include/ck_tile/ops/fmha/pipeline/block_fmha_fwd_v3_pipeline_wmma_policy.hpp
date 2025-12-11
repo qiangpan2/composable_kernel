@@ -29,8 +29,6 @@ struct BlockFmhaV3PipelineWmmaPolicy : public BlockFmhaV3PipelineDefaultPolicy
     CK_TILE_HOST_DEVICE static constexpr auto MakeVRegTileDistribution()
     {
         using namespace ck_tile;
-        
-        using WarpGemm = remove_cvref_t<decltype(GetPVWarpGemm<Problem>())>;
 
         constexpr index_t MWarp = Problem::BlockFmhaShape::Gemm1BlockWarps::at(number<0>{});
         constexpr index_t NWarp = Problem::BlockFmhaShape::Gemm1BlockWarps::at(number<1>{});
@@ -38,24 +36,26 @@ struct BlockFmhaV3PipelineWmmaPolicy : public BlockFmhaV3PipelineDefaultPolicy
         constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN1;
         constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kK1;
 
-        constexpr index_t NIterPerWarp = kNPerBlock / (NWarp * WarpGemm::kN);
-        constexpr index_t KIterPerWarp = kKPerBlock / WarpGemm::kK;
+        // WMMA warp tile is 16x16x16 (format: sequence<M, N, K>)
+        constexpr index_t kWarpN = Problem::BlockFmhaShape::Gemm1WarpTile::at(number<1>{}); // N dimension
+        constexpr index_t kWarpK = Problem::BlockFmhaShape::Gemm1WarpTile::at(number<2>{}); // K dimension
+
+        constexpr index_t NIterPerWarp = kNPerBlock / (NWarp * kWarpN);
+        constexpr index_t KIterPerWarp = kKPerBlock / kWarpK;
 
         if constexpr(Problem::BlockFmhaShape::IsVLayoutRowMajor)
         {
-            // For RowMajor V on WMMA: Create a distribution encoding that matches
-            // WMMA's B matrix requirements without needing transpose
+            // For RowMajor V on WMMA: Create a simplified distribution that doesn't require transpose
             // 
-            // Key insight: WMMA 16x16x16 expects B matrix in a specific layout.
-            // Instead of loading V normally and transposing, we construct the 
-            // distribution to match V's RowMajor storage directly.
-            //
-            // V is [seqlen, hdim] in RowMajor, meaning contiguous in hdim dimension
             // For P@V gemm: P[M,K] @ V[K,N] where K=seqlen, N=hdim
-            // But V is stored as [K,N] RowMajor = need B matrix format
+            // V is [K, N] in RowMajor storage
+            //
+            // The key insight: instead of using BWarpDstrEncoding and transposing,
+            // we create a distribution that directly maps to WMMA's expected B-matrix layout
+            // This avoids the TransposeTileDistributionTraits validation failure
             
-            // WMMA warp tile distribution for B matrix (16x16 per warp)
-            // Distribute across (seqlen_dim, hdim_dim)
+            // Simplified tile distribution: distribute iterations over warps
+            // Format: [M_warp][N_iter, N_warp][K_iter]
             constexpr auto v_block_outer_dstr_encoding =
                 tile_distribution_encoding<sequence<MWarp>,
                                           tuple<sequence<NIterPerWarp, NWarp>, 
@@ -65,8 +65,7 @@ struct BlockFmhaV3PipelineWmmaPolicy : public BlockFmhaV3PipelineDefaultPolicy
                                           sequence<2, 1>,
                                           sequence<0, 0>>{};
             
-            // Create the tile distribution directly without embedding BWarpDstrEncoding
-            // This avoids the problematic transpose validation
+            // Create the tile distribution directly
             constexpr auto v_block_dstr = make_static_tile_distribution(v_block_outer_dstr_encoding);
             return v_block_dstr;
         }
