@@ -162,7 +162,7 @@ struct TileFmhaShape_Wmma
                                WarpGemmShape,
                                Gemm1BlockWarps,
                                WarpGemmShape,
-                               false,  // IsVLayoutRowMajor - use ColumnMajor to avoid transpose
+                               true,  // IsVLayoutRowMajor - use ColumnMajor to avoid transpose
                                WGAttrNumAccessEnum::Single>; // WMMA only supports Single
 };
 
