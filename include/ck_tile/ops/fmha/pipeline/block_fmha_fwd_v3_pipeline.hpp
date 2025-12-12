@@ -501,7 +501,7 @@ struct BlockFmhaFwdV3Pipeline
             // - RowMajor (true): use load_tile_transpose
             // - ColumnMajor (false): use load_tile (no transpose)
             std::conditional_t<
-                FmhaShape::IsVLayoutRowMajor,
+                BlockFmhaShape::IsVLayoutRowMajor,
                 decltype(load_tile_transpose(v_lds_window_load(number<0>{}))),
                 decltype(load_tile(v_lds_window_load(number<0>{})))
             > v_tile;
@@ -706,7 +706,7 @@ struct BlockFmhaFwdV3Pipeline
         };
 
         auto V_lds_load = [&](auto v_lds_read_idx) {
-            if constexpr(FmhaShape::IsVLayoutRowMajor)
+            if constexpr(BlockFmhaShape::IsVLayoutRowMajor)
             {
                 // V is RowMajor in DRAM, needs transpose to ColumnMajor for GEMM
                 kv_tile.v_tile = load_tile_transpose(v_lds_window_load(v_lds_read_idx));
