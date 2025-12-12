@@ -130,7 +130,7 @@ struct TileFmhaShape_Wmma
 {
     // WMMA configuration for gfx11/gfx12 - V3 Pipeline Requirements
     // M0=64, N0=64, K0=64, N1=64, K1=64, K0max=Hdim
-    // 
+    //
     // V3 Pipeline Constraints:
     // - k0_loops = kQKHeaddim / kK0 must == 1, so kK0 must equal Hdim (64)
     // - k1_loops = kN0 / kK1 must == 1, so kK1 must equal kN0 (64)
@@ -143,15 +143,17 @@ struct TileFmhaShape_Wmma
     //   * kK1 = Hdim (64), kN0 = 64 → k1_loops = 64/64 = 1 ✓
     //   * kN0 == kK1 (both 64) ✓
     // 
-    // - Custom WMMA policy has NumThreadPerWarpGroup = 2 * 32 = 64 threads per group
-    // - Need NumWarpGroups = 2, so BlockSize = 2 * 64 = 128 threads
-    // - This requires 128/32 = 4 warps total
-    // - Gemm0BlockWarps: <2, 2, 1> gives 4 warps (2*2*1 = 4)
+    // - Custom BlockFmhaV3PipelineWmmaPolicy:
+    //   * NumThreadPerWarpGroup = 2 * 32 = 64 threads per group
+    //   * NumWarpGroups = 2 required by v3 pipeline
+    //   * BlockSize = 2 * 64 = 128 threads = 4 warps
+    // 
+    // - Gemm0/Gemm1BlockWarps: <2, 2, 1> gives 4 warps (2*2*1 = 4) ✓
     // - NumWarpGroups = 128 / 64 = 2 ✓
     // 
     // - WarpGemmShape: <16, 16, 16> for WMMA 16x16x16
-    // - RowMajor V layout (IsVLayoutRowMajor=true) - matches standard FlashAttention layout
-    // - WMMA policy provides custom MakeVRegTileDistribution to handle this without transpose
+    // - ColumnMajor V layout (IsVLayoutRowMajor=false) - avoids transpose load for WMMA
+    //   WMMA tile distribution doesn't support transpose load, so we use ColumnMajor
     // - Shared memory: ~32KB (well within RDNA3 64KB limit)
     using BlockTile       = sequence<64, 64, Hdim, 64, Hdim, Hdim>;
     using WarpGemmShape   = sequence<16, 16, 16>;
@@ -163,7 +165,7 @@ struct TileFmhaShape_Wmma
                                WarpGemmShape,
                                Gemm1BlockWarps,
                                WarpGemmShape,
-                               true,  // IsVLayoutRowMajor - V is RowMajor (seqlen, hdim) in DRAM
+                               false,  // IsVLayoutRowMajor - use ColumnMajor to avoid transpose for WMMA
                                WGAttrNumAccessEnum::Single>; // WMMA only supports Single
 };
 

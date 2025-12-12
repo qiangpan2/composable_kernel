@@ -497,7 +497,14 @@ struct BlockFmhaFwdV3Pipeline
 
             decltype(load_tile(k_lds_window_load(number<0>{}))) k_tile;
 
-            decltype(load_tile_transpose(v_lds_window_load(number<0>{}))) v_tile;
+            // V tile type depends on IsVLayoutRowMajor:
+            // - RowMajor (true): use load_tile_transpose
+            // - ColumnMajor (false): use load_tile (no transpose)
+            std::conditional_t<
+                FmhaShape::IsVLayoutRowMajor,
+                decltype(load_tile_transpose(v_lds_window_load(number<0>{}))),
+                decltype(load_tile(v_lds_window_load(number<0>{})))
+            > v_tile;
         } kv_tile;
 
         union sp_compute_type
@@ -699,7 +706,16 @@ struct BlockFmhaFwdV3Pipeline
         };
 
         auto V_lds_load = [&](auto v_lds_read_idx) {
-            kv_tile.v_tile = load_tile_transpose(v_lds_window_load(v_lds_read_idx));
+            if constexpr(FmhaShape::IsVLayoutRowMajor)
+            {
+                // V is RowMajor in DRAM, needs transpose to ColumnMajor for GEMM
+                kv_tile.v_tile = load_tile_transpose(v_lds_window_load(v_lds_read_idx));
+            }
+            else
+            {
+                // V is already ColumnMajor in DRAM, load directly
+                kv_tile.v_tile = load_tile(v_lds_window_load(v_lds_read_idx));
+            }
         };
 
         decltype(m) m_old;

@@ -23,8 +23,8 @@ struct BlockFmhaV3PipelineWmmaPolicy : public BlockFmhaV3PipelineDefaultPolicy
     static constexpr ck_tile::index_t NumThreadPerWarpGroup = 64;  // 2 * 32 = NumWarpPerGroup * warp_size
     
     // WMMA-specific V register tile distribution
-    // RDNA3/4 WMMA has different ps_to_rhss structure than MFMA, requires adjusted outer encoding
-    // Also, WMMA doesn't support TransposeTileDistributionTraits, so we handle RowMajor V specially
+    // RDNA3/4 WMMA has built-in ps_to_rhss in BWarpDstrEncoding (different for gfx11 vs gfx12)
+    // Must use empty outer ps_to_rhss to avoid conflicts with warp-level ps_to_rhss
     template <typename Problem>
     CK_TILE_DEVICE static constexpr auto MakeVRegTileDistribution()
     {
@@ -43,12 +43,15 @@ struct BlockFmhaV3PipelineWmmaPolicy : public BlockFmhaV3PipelineDefaultPolicy
         constexpr index_t NIterPerWarp = kNPerBlock / (NWarp * WarpGemm::kN);
         constexpr index_t KIterPerWarp = kKPerBlock / WarpGemm::kK;
 
-        // For WMMA: Place MWarp in R dimension (not P dimension) to avoid ps_to_rhss conflicts
-        // Empty Ps2RHss allows WMMA's BWarpDstrEncoding ps_to_rhss to work for both RDNA3/4
+        // For WMMA: Use empty Ps2RHss in outer encoding
+        // WMMA's BWarpDstrEncoding already has architecture-specific ps_to_rhss:
+        // - gfx11: kABPs2RHssMajor = <0, 2, 1>
+        // - gfx12: kABPs2RHssMajor = <2, 1>
+        // Adding outer ps_to_rhss would cause conflicts during embedding
         constexpr auto v_block_outer_dstr_encoding =
-            tile_distribution_encoding<sequence<MWarp>,  // MWarp in R dimension  
+            tile_distribution_encoding<sequence<MWarp>,
                                        tuple<sequence<NIterPerWarp, NWarp>, sequence<KIterPerWarp>>,
-                                       tuple<>,  // Empty Ps2RHssMajor - no P dimensions in outer encoding
+                                       tuple<>,  // Empty Ps2RHssMajor - avoid conflict with warp ps_to_rhss
                                        tuple<>,  // Empty Ps2RHssMinor
                                        sequence<1, 2>,
                                        sequence<0, 0>>{};
@@ -56,12 +59,8 @@ struct BlockFmhaV3PipelineWmmaPolicy : public BlockFmhaV3PipelineDefaultPolicy
         constexpr auto v_block_dstr_encode = detail::make_embed_tile_distribution_encoding(
             v_block_outer_dstr_encoding, typename WarpGemm::BWarpDstrEncoding{});
 
-        // V is RowMajor (seqlen, hdim) in DRAM as per FlashAttention standard
-        // WMMA doesn't support TransposeTileDistributionTraits, so use encoding directly
+        // Use encoding directly - no transpose needed when IsVLayoutRowMajor=false
         // The encoding already accounts for the correct memory access pattern
-        static_assert(Problem::BlockFmhaShape::IsVLayoutRowMajor == true,
-                      "Expected RowMajor V layout to match FlashAttention standard");
-        
         constexpr auto v_block_dstr = make_static_tile_distribution(v_block_dstr_encode);
         return v_block_dstr;
     }
