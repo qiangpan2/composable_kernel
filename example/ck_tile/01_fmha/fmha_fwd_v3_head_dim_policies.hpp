@@ -5,52 +5,62 @@
 
 
 #include "fmha_fwd_v3_impl.hpp"
-#include "ck_tile/ops/fmha/pipeline/block_fmha_fwd_v3_pipeline_wmma_policy.hpp"
 
 namespace ck_tile {
 
-struct FmhaFwdV3Policy_Hdim64_Wmma : public BlockFmhaV3PipelineWmmaPolicy
-{
-};
-
 template <fmha_fwd_v3_args::data_type_enum DataType, bool IsMasking>
-struct fmha_fwd_v3_kernel_traits_ext_hdim64
+struct fmha_fwd_v3_kernel_traits_ext_hdim64_generic
 {
     static constexpr auto date_type          = DataType;
     static constexpr bool is_variable_seqlen = false;
     static constexpr bool is_masking         = IsMasking;
 
-    using qkvp_dtype = typename fmha_fwd_v3_problem_traits<date_type>::qkvp_dtype;
-    using acc_dtype  = typename fmha_fwd_v3_problem_traits<date_type>::acc_dtype;
-    using o_dtype    = typename fmha_fwd_v3_problem_traits<date_type>::o_dtype;
-    using lse_dtype  = typename fmha_fwd_v3_problem_traits<date_type>::lse_dtype;
+    //                                    M0   N0  K0   N1   K1
+    using fmha_block_tile      = sequence<256, 32, 128, 128, 32, 128>;
+    using fmha_warp_gemm_shape = sequence<32, 32, 16>;
+    using fmha_block_warps     = sequence<8, 1, 1>;
 
-    using fmha_shape  = typename TileFmhaShape_Wmma<64>::Type;
-    using fmha_traits = TileFmhaFwdV3Traits<true, true, false, false, false, -1>;
-    using fmha_mask   = GenericAttentionMask<IsMasking, /*IsLocal=*/false>;
+    using fmha_shape = TileFmhaShape<fmha_block_tile,
+                                     fmha_block_warps,
+                                     fmha_warp_gemm_shape,
+                                     fmha_block_warps,
+                                     fmha_warp_gemm_shape,
+                                     true // IsVLayoutRowMajor
+                                     >;
 
-    using fmha_pipeline_problem = BlockFmhaFwdV3PipelineProblem<qkvp_dtype,
-                                                                qkvp_dtype,
-                                                                qkvp_dtype,
-                                                                acc_dtype,
-                                                                acc_dtype,
-                                                                lse_dtype,
-                                                                qkvp_dtype,
-                                                                acc_dtype,
-                                                                o_dtype,
-                                                                fmha_shape,
-                                                                is_variable_seqlen,
-                                                                fmha_mask,
-                                                                fmha_traits>;
+    using fmha_traits = TileFmhaFwdV3Traits<true,  // kPadSeqLenQ
+                                            true,  // kPadSeqLenK
+                                            true,  // kPadHeadDimQ (important for head_dim=64)
+                                            true,  // kPadHeadDimV (important for head_dim=64)
+                                            false, // kStoreLSE
+                                            -1     // kBlockPerCu
+                                            >;
 
-    using fmha_pipeline =
-        BlockFmhaFwdV3Pipeline<fmha_pipeline_problem, FmhaFwdV3Policy_Hdim64_Wmma>;
+    using fmha_mask = GenericAttentionMask<IsMasking, /*IsLocal=*/false>;
+
+    using fmha_pipeline_problem =
+        BlockFmhaFwdV3PipelineProblem<typename fmha_fwd_v3_problem_traits<date_type>::qkvp_dtype,
+                                      typename fmha_fwd_v3_problem_traits<date_type>::qkvp_dtype,
+                                      typename fmha_fwd_v3_problem_traits<date_type>::qkvp_dtype,
+                                      typename fmha_fwd_v3_problem_traits<date_type>::acc_dtype,
+                                      typename fmha_fwd_v3_problem_traits<date_type>::acc_dtype,
+                                      typename fmha_fwd_v3_problem_traits<date_type>::lse_dtype,
+                                      typename fmha_fwd_v3_problem_traits<date_type>::qkvp_dtype,
+                                      typename fmha_fwd_v3_problem_traits<date_type>::acc_dtype,
+                                      typename fmha_fwd_v3_problem_traits<date_type>::o_dtype,
+                                      fmha_shape,
+                                      is_variable_seqlen,
+                                      fmha_mask,
+                                      fmha_traits>;
+
+    using fmha_pipeline = BlockFmhaFwdV3Pipeline<fmha_pipeline_problem>;
 
     using epilogue = Default2DEpilogue<
-        Default2DEpilogueProblem<lse_dtype,
-                                 o_dtype,
+        Default2DEpilogueProblem<typename fmha_fwd_v3_problem_traits<date_type>::acc_dtype,
+                                 typename fmha_fwd_v3_problem_traits<date_type>::o_dtype,
                                  true, // kPadM
-                                 true  // kPadN
+                                 true, // kPadM
+                                 true  // UseRawStore
                                  >>;
 
     using kernel = FmhaFwdV3Kernel<fmha_pipeline, epilogue>;
@@ -121,7 +131,7 @@ struct fmha_fwd_v3_kernel_traits_selector;
 template <fmha_fwd_v3_args::data_type_enum DataType, bool IsMasking>
 struct fmha_fwd_v3_kernel_traits_selector<DataType, IsMasking, 64>
 {
-    using type = fmha_fwd_v3_kernel_traits_ext_hdim64<DataType, IsMasking>;
+    using type = fmha_fwd_v3_kernel_traits_ext_hdim64_generic<DataType, IsMasking>;
 };
 
 template <fmha_fwd_v3_args::data_type_enum DataType, bool IsMasking>
