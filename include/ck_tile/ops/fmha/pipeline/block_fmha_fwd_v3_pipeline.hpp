@@ -497,14 +497,11 @@ struct BlockFmhaFwdV3Pipeline
 
             decltype(load_tile(k_lds_window_load(number<0>{}))) k_tile;
 
-            // V tile type depends on IsVLayoutRowMajor:
-            // - RowMajor (true): use load_tile_transpose
-            // - ColumnMajor (false): use load_tile (no transpose)
-            std::conditional_t<
-                BlockFmhaShape::IsVLayoutRowMajor,
-                decltype(load_tile_transpose(v_lds_window_load(number<0>{}))),
-                decltype(load_tile(v_lds_window_load(number<0>{})))
-            > v_tile;
+            // V tile type - determined by Policy's MakeVTileType hook.
+            // Policies can customize this to avoid instantiating load_tile_transpose on
+            // architectures that don't support it (e.g., WMMA paths).
+            typename Policy::template MakeVTileType<decltype(v_lds_window_load(number<0>{})),
+                                                    BlockFmhaShape::IsVLayoutRowMajor>::type v_tile;
         } kv_tile;
 
         union sp_compute_type

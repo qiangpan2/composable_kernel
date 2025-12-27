@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <utility>
 #include "ck_tile/core.hpp"
 #include "ck_tile/ops/gemm/block/block_gemm_areg_breg_creg_v2.hpp"
 #include "ck_tile/ops/gemm/block/block_gemm_areg_breg_creg_v2_custom_policy.hpp"
@@ -16,6 +17,21 @@ struct BlockFmhaV3PipelineDefaultPolicy
     static constexpr ck_tile::index_t NumWarpPerGroup = 4;
     static constexpr ck_tile::index_t NumThreadPerWarpGroup =
         NumWarpPerGroup * ck_tile::get_warp_size();
+
+    // Default V tile type helper:
+    // - ColumnMajor (IsVLayoutRowMajor=false): use load_tile (no transpose)
+    // - RowMajor (IsVLayoutRowMajor=true): use load_tile_transpose
+    template <typename VLdsWindow, bool IsVLayoutRowMajor>
+    struct MakeVTileType
+    {
+        using type = decltype(load_tile(std::declval<VLdsWindow>()));
+    };
+
+    template <typename VLdsWindow>
+    struct MakeVTileType<VLdsWindow, true>
+    {
+        using type = decltype(load_tile_transpose(std::declval<VLdsWindow>()));
+    };
 
     // TODO: GetAlignment*() currently didn't consider if need padding or not
     //       so in pipeline still need check padding requirement

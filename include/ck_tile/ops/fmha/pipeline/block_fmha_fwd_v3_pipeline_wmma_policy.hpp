@@ -22,6 +22,19 @@ struct BlockFmhaV3PipelineWmmaPolicy : public BlockFmhaV3PipelineDefaultPolicy
     // HARDCODE 64 instead of computing from get_warp_size() to avoid macro dependency issues
     static constexpr ck_tile::index_t NumThreadPerWarpGroup = 64;  // 2 * 32 = NumWarpPerGroup * warp_size
     
+    // WMMA-specific V tile type:
+    // - Never use load_tile_transpose (some WMMA paths don't support it / shouldn't instantiate it).
+    // - Enforce ColumnMajor V layout for WMMA policy.
+    template <typename VLdsWindow, bool IsVLayoutRowMajor>
+    struct MakeVTileType
+    {
+        static_assert(!IsVLayoutRowMajor,
+                      "BlockFmhaV3PipelineWmmaPolicy requires V layout to be ColumnMajor "
+                      "(IsVLayoutRowMajor=false). If you hit this, use a non-WMMA policy or "
+                      "a shape with ColumnMajor V layout.");
+        using type = decltype(load_tile(std::declval<VLdsWindow>()));
+    };
+
     // WMMA-specific V register tile distribution
     // RDNA3/4 WMMA has built-in ps_to_rhss in BWarpDstrEncoding (different for gfx11 vs gfx12)
     // Must use empty outer ps_to_rhss to avoid conflicts with warp-level ps_to_rhss
