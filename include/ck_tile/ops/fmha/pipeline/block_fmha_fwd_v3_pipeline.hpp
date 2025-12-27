@@ -238,7 +238,7 @@ CK_TILE_DEVICE fp16x2_t cvt_pk_fp16_f32(float a, float b)
 CK_TILE_DEVICE bf16x2_t cvt_pk_bf16_f32(float a, float b)
 {
 #if defined(__gfx11__) || defined(__gfx12__)
-    return bf16x2_t{bfloat16_t{a}, bfloat16_t{b}};
+    return bf16x2_t{float_to_bf16(a), float_to_bf16(b)};
 #else
     bf16x2_t result;
     asm volatile("v_cvt_pk_bf16_f32 %[result], %[a], %[b]"
