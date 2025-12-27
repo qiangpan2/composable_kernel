@@ -55,9 +55,10 @@ struct BlockFmhaV3PipelineDefaultPolicy
 #if defined(__gfx950__)
         constexpr index_t MaxReadSizeInBytes = 16;
 #elif defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1200__) || defined(__gfx1201__)
-        // For wave32 targets running v3 FMHA with head_dim=128, we need KVector=4 (fp16/bf16)
-        // to satisfy: WarpSize * KVector >= kKPerBlock.
-        constexpr index_t MaxReadSizeInBytes = 8;
+        // Narrow the override to the v3 (head_dim=128) case. The WMMA (head_dim=64) path and other shapes should keep the default 4
+        constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kK0;
+        constexpr index_t MaxReadSizeInBytes =
+            (kKPerBlock >= 128 ? 16 : 4);
 #else
         constexpr index_t MaxReadSizeInBytes = 4;
 #endif
@@ -72,7 +73,9 @@ struct BlockFmhaV3PipelineDefaultPolicy
 #if defined(__gfx950__)
         constexpr index_t MaxReadSizeInBytes = 16;
 #elif defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1200__) || defined(__gfx1201__)
-        constexpr index_t MaxReadSizeInBytes = 8;
+        constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;
+        constexpr index_t MaxReadSizeInBytes =
+            (kKPerBlock >= 128 ? 16 : 4);
 #else
         constexpr index_t MaxReadSizeInBytes = 4;
 #endif
