@@ -1227,7 +1227,9 @@ CK_TILE_DEVICE void async_buffer_load_dwordxn_v(void* smem,
 {
 #if defined(__gfx11__) || defined(__gfx12__)
     // gfx11/gfx12 (RDNA3/RDNA4) toolchains may reject the `buffer_load_* ... lds` inline-asm form.
-    // Provide a safe fallback: use LLVM intrinsic `raw.buffer.load.lds`.
+    // Provide a safe fallback: load into VGPR then store to LDS.
+    // NOTE: Using `llvm.amdgcn.raw.buffer.load.lds` can trigger compiler crashes in some ROCm
+    // toolchains; prefer the conservative VGPR->LDS sequence here.
     static_assert(num_dwords >= 1 && num_dwords <= 4,
                   "gfx11/gfx12 fallback path only supports 1..4 dword loads currently");
 
@@ -1236,37 +1238,33 @@ CK_TILE_DEVICE void async_buffer_load_dwordxn_v(void* smem,
         asm volatile("s_nop 4\n" : : : "memory");
     }
 
-    // Map to the same addressing mode as the inline asm:
-    //   buffer_load_dword v, srsrc, soffset=0 offen offset:ioffset lds
-    // Note: some toolchains/targets are picky about vector sizes for direct-to-LDS loads.
-    // We conservatively issue multiple 4B loads to cover 1..4 dwords.
-    // Cast to LDS address space pointer (addrspace(3)).
-    // Use uintptr_t hop to avoid Clang complaining about casting away qualifiers.
+    // Preserve the same effective address as:
+    //   buffer_load_dword ..., voffset, soffset=0, offset:ioffset
+    // i.e. byte_offset = voffset + ioffset (+ 4*dword_idx)
     auto lds_ptr = reinterpret_cast<as3_uint32_ptr>(reinterpret_cast<uintptr_t>(smem));
     if constexpr(num_dwords >= 1)
     {
-        llvm_amdgcn_raw_buffer_load_lds(
-            rsrc, lds_ptr + 0, /*size(bytes)*/ 4, voffset + 0, /*soffset*/ 0, ioffset, /*aux*/ 0);
+        const uint32_t tmp =
+            bit_cast<uint32_t>(llvm_amdgcn_raw_buffer_load_i32(rsrc, voffset + ioffset + 0, 0, 0));
+        lds_ptr[0] = tmp;
     }
     if constexpr(num_dwords >= 2)
     {
-        llvm_amdgcn_raw_buffer_load_lds(
-            rsrc, lds_ptr + 1, /*size(bytes)*/ 4, voffset + 4, /*soffset*/ 0, ioffset, /*aux*/ 0);
+        const uint32_t tmp =
+            bit_cast<uint32_t>(llvm_amdgcn_raw_buffer_load_i32(rsrc, voffset + ioffset + 4, 0, 0));
+        lds_ptr[1] = tmp;
     }
     if constexpr(num_dwords >= 3)
     {
-        llvm_amdgcn_raw_buffer_load_lds(
-            rsrc, lds_ptr + 2, /*size(bytes)*/ 4, voffset + 8, /*soffset*/ 0, ioffset, /*aux*/ 0);
+        const uint32_t tmp =
+            bit_cast<uint32_t>(llvm_amdgcn_raw_buffer_load_i32(rsrc, voffset + ioffset + 8, 0, 0));
+        lds_ptr[2] = tmp;
     }
     if constexpr(num_dwords >= 4)
     {
-        llvm_amdgcn_raw_buffer_load_lds(rsrc,
-                                        lds_ptr + 3,
-                                        /*size(bytes)*/ 4,
-                                        voffset + 12,
-                                        /*soffset*/ 0,
-                                        ioffset,
-                                        /*aux*/ 0);
+        const uint32_t tmp = bit_cast<uint32_t>(
+            llvm_amdgcn_raw_buffer_load_i32(rsrc, voffset + ioffset + 12, 0, 0));
+        lds_ptr[3] = tmp;
     }
     return;
 #endif
