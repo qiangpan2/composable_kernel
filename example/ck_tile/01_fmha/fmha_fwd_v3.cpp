@@ -2,7 +2,7 @@
 // Copyright (c) 2018-2025, Advanced Micro Devices, Inc. All rights reserved.
 
 #include "fmha_fwd_v3.hpp"
-#include "fmha_fwd_v3_impl.hpp"
+#include "fmha_fwd_v3_head_dim_policies.hpp"
 #include "mask.hpp"
 
 namespace ck_tile {
@@ -19,38 +19,79 @@ std::ostream& operator<<(std::ostream& stream, const fmha_fwd_v3_args::data_type
 
 std::pair<bool, float> fmha_fwd_v3(const fmha_fwd_v3_args& args, const stream_config& config)
 {
+    auto unsupported_hdim = [&]() {
+        // Return false to indicate "no kernel launched" (caller will TORCH_CHECK(success)).
+        return std::make_pair(false, -1.f);
+    };
+
     if(args.data_type == fmha_fwd_v3_args::data_type_enum::fp16)
     {
         if(args.mask_type == static_cast<int>(mask_enum::no_mask))
         {
-            using kernel_traits =
-                fmha_fwd_v3_kernel_traits<fmha_fwd_v3_args::data_type_enum::fp16, false, false>;
-
-            return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            if(args.hdim_qk == 64)
+            {
+                using kernel_traits = typename fmha_fwd_v3_kernel_traits_selector<
+                    fmha_fwd_v3_args::data_type_enum::fp16, false, 64>::type;
+                return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            }
+            if(args.hdim_qk == 128)
+            {
+                using kernel_traits = typename fmha_fwd_v3_kernel_traits_selector<
+                    fmha_fwd_v3_args::data_type_enum::fp16, false, 128>::type;
+                return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            }
+            return unsupported_hdim();
         }
         else
         {
-            using kernel_traits =
-                fmha_fwd_v3_kernel_traits<fmha_fwd_v3_args::data_type_enum::fp16, false, true>;
-
-            return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            if(args.hdim_qk == 64)
+            {
+                using kernel_traits = typename fmha_fwd_v3_kernel_traits_selector<
+                    fmha_fwd_v3_args::data_type_enum::fp16, true, 64>::type;
+                return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            }
+            if(args.hdim_qk == 128)
+            {
+                using kernel_traits = typename fmha_fwd_v3_kernel_traits_selector<
+                    fmha_fwd_v3_args::data_type_enum::fp16, true, 128>::type;
+                return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            }
+            return unsupported_hdim();
         }
     }
     else if(args.data_type == fmha_fwd_v3_args::data_type_enum::bf16)
     {
         if(args.mask_type == static_cast<int>(mask_enum::no_mask))
         {
-            using kernel_traits =
-                fmha_fwd_v3_kernel_traits<fmha_fwd_v3_args::data_type_enum::bf16, false, false>;
-
-            return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            if(args.hdim_qk == 64)
+            {
+                using kernel_traits = typename fmha_fwd_v3_kernel_traits_selector<
+                    fmha_fwd_v3_args::data_type_enum::bf16, false, 64>::type;
+                return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            }
+            if(args.hdim_qk == 128)
+            {
+                using kernel_traits = typename fmha_fwd_v3_kernel_traits_selector<
+                    fmha_fwd_v3_args::data_type_enum::bf16, false, 128>::type;
+                return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            }
+            return unsupported_hdim();
         }
         else
         {
-            using kernel_traits =
-                fmha_fwd_v3_kernel_traits<fmha_fwd_v3_args::data_type_enum::bf16, false, true>;
-
-            return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            if(args.hdim_qk == 64)
+            {
+                using kernel_traits = typename fmha_fwd_v3_kernel_traits_selector<
+                    fmha_fwd_v3_args::data_type_enum::bf16, true, 64>::type;
+                return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            }
+            if(args.hdim_qk == 128)
+            {
+                using kernel_traits = typename fmha_fwd_v3_kernel_traits_selector<
+                    fmha_fwd_v3_args::data_type_enum::bf16, true, 128>::type;
+                return fmha_fwd_v3_kernel_dispatch<kernel_traits>(args, config);
+            }
+            return unsupported_hdim();
         }
     }
 
