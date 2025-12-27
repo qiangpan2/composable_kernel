@@ -1372,7 +1372,9 @@ CK_TILE_DEVICE void async_buffer_load_dwordxn_v(void* smem,
     //   buffer_load_dword v, srsrc, soffset=0 offen offset:ioffset lds
     // Note: some toolchains/targets are picky about vector sizes for direct-to-LDS loads.
     // We conservatively issue multiple 4B loads to cover 1..4 dwords.
-    auto lds_ptr = static_cast<as3_uint32_ptr>(smem);
+    // Cast to LDS address space pointer (addrspace(3)).
+    // Use uintptr_t hop to avoid Clang complaining about casting away qualifiers.
+    auto lds_ptr = reinterpret_cast<as3_uint32_ptr>(reinterpret_cast<uintptr_t>(smem));
     if constexpr(num_dwords >= 1)
     {
         llvm_amdgcn_raw_buffer_load_lds(
