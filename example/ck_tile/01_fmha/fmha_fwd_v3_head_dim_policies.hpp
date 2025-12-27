@@ -30,8 +30,8 @@ struct fmha_fwd_v3_kernel_traits_ext_hdim64_generic
 
     using fmha_traits = TileFmhaFwdV3Traits<true,  // kPadSeqLenQ
                                             true,  // kPadSeqLenK
-                                            true,  // kPadHeadDimQ (important for head_dim=64)
-                                            true,  // kPadHeadDimV (important for head_dim=64)
+                                            false, // kPadHeadDimQ
+                                            false, // kPadHeadDimV
                                             false, // kStoreLSE
                                             -1     // kBlockPerCu
                                             >;
