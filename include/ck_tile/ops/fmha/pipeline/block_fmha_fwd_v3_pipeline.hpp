@@ -220,29 +220,45 @@ CK_TILE_DEVICE float mul_impl_vv(float lhs, float rhs)
 
 CK_TILE_DEVICE fp16x2_t cvt_pk_fp16_f32(float a, float b)
 {
+#if defined(__gfx11__) || defined(__gfx12__)
+    fp16x2_t result;
+    asm volatile("v_cvt_pk_rtz_f16_f32 %[result], %[a], %[b]"
+                 : [result] "=v"(result)
+                 : [a] "v"(a), [b] "v"(b));
+    return result;
+#else
     fp16x2_t result;
     asm volatile("v_cvt_pk_f16_f32 %[result], %[a], %[b]"
                  : [result] "=v"(result)
                  : [a] "v"(a), [b] "v"(b));
     return result;
+#endif
 }
 
 CK_TILE_DEVICE bf16x2_t cvt_pk_bf16_f32(float a, float b)
 {
+#if defined(__gfx11__) || defined(__gfx12__)
+    return bf16x2_t{bfloat16_t{a}, bfloat16_t{b}};
+#else
     bf16x2_t result;
     asm volatile("v_cvt_pk_bf16_f32 %[result], %[a], %[b]"
                  : [result] "=v"(result)
                  : [a] "v"(a), [b] "v"(b));
     return result;
+#endif
 }
 
 CK_TILE_DEVICE fp32x2_t pk_mul_f32(fp32x2_t lhs, fp32x2_t rhs)
 {
+#if defined(__gfx11__) || defined(__gfx12__)
+    return fp32x2_t{lhs[0] * rhs[0], lhs[1] * rhs[1]};
+#else
     fp32x2_t result;
     asm volatile("v_pk_mul_f32 %[result], %[lhs], %[rhs]"
                  : [result] "=v"(result)
                  : [lhs] "v"(lhs), [rhs] "v"(rhs));
     return result;
+#endif
 }
 } // namespace detail
 
