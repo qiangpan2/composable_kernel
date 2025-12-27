@@ -1357,6 +1357,50 @@ CK_TILE_DEVICE void async_buffer_load_dwordxn_v(void* smem,
                                                 index_t /*flag*/       = 0,
                                                 bool_constant<pre_nop> = {})
 {
+#if defined(__gfx11__) || defined(__gfx12__)
+    // gfx11/gfx12 (RDNA3/RDNA4) toolchains may reject the `buffer_load_* ... lds` inline-asm form.
+    // Provide a safe fallback: use LLVM intrinsic `raw.buffer.load.lds`.
+    static_assert(num_dwords >= 1 && num_dwords <= 4,
+                  "gfx11/gfx12 fallback path only supports 1..4 dword loads currently");
+
+    if constexpr(pre_nop)
+    {
+        asm volatile("s_nop 4\n" : : : "memory");
+    }
+
+    // Map to the same addressing mode as the inline asm:
+    //   buffer_load_dword v, srsrc, soffset=0 offen offset:ioffset lds
+    // Note: some toolchains/targets are picky about vector sizes for direct-to-LDS loads.
+    // We conservatively issue multiple 4B loads to cover 1..4 dwords.
+    auto lds_ptr = static_cast<as3_uint32_ptr>(smem);
+    if constexpr(num_dwords >= 1)
+    {
+        llvm_amdgcn_raw_buffer_load_lds(
+            rsrc, lds_ptr + 0, /*size(bytes)*/ 4, voffset + 0, /*soffset*/ 0, ioffset, /*aux*/ 0);
+    }
+    if constexpr(num_dwords >= 2)
+    {
+        llvm_amdgcn_raw_buffer_load_lds(
+            rsrc, lds_ptr + 1, /*size(bytes)*/ 4, voffset + 4, /*soffset*/ 0, ioffset, /*aux*/ 0);
+    }
+    if constexpr(num_dwords >= 3)
+    {
+        llvm_amdgcn_raw_buffer_load_lds(
+            rsrc, lds_ptr + 2, /*size(bytes)*/ 4, voffset + 8, /*soffset*/ 0, ioffset, /*aux*/ 0);
+    }
+    if constexpr(num_dwords >= 4)
+    {
+        llvm_amdgcn_raw_buffer_load_lds(rsrc,
+                                        lds_ptr + 3,
+                                        /*size(bytes)*/ 4,
+                                        voffset + 12,
+                                        /*soffset*/ 0,
+                                        ioffset,
+                                        /*aux*/ 0);
+    }
+    return;
+#endif
+
 #define CK_TILE_ASYNC_LOAD_WITH_INSTR(instr)                            \
     if constexpr(pre_nop)                                               \
         asm volatile("s_nop 4\n" instr " %1, %2, 0 offen offset:%3 lds" \
