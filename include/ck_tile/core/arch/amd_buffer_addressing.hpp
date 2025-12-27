@@ -1357,12 +1357,9 @@ CK_TILE_DEVICE void async_buffer_load_dwordxn_v(void* smem,
                                                 index_t /*flag*/       = 0,
                                                 bool_constant<pre_nop> = {})
 {
-#if defined(__gfx11__) || defined(__gfx12__) || defined(__gfx1100__) || defined(__gfx1101__) || \
-    defined(__gfx1200__) || defined(__gfx1201__)
-    // gfx11/gfx12 (RDNA3/RDNA4) toolchains may reject the `buffer_load_* ... lds` inline-asm form.
-    // Provide a safe fallback: load into VGPR then store to LDS.
-    // NOTE: Using `llvm.amdgcn.raw.buffer.load.lds` can trigger compiler crashes in some ROCm
-    // toolchains; prefer the conservative VGPR->LDS sequence here.
+#if defined(__HIP_DEVICE_COMPILE__) &&                                                      \
+    (defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1200__) || defined(__gfx1201__))
+    // gfx11/gfx12 (RDNA3/RDNA4): use a safe fallback (VGPR load -> LDS store).
     static_assert(num_dwords >= 1 && num_dwords <= 4,
                   "gfx11/gfx12 fallback path only supports 1..4 dword loads currently");
 
