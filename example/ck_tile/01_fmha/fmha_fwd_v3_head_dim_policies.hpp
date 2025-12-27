@@ -9,35 +9,6 @@
 
 namespace ck_tile {
 
-struct FmhaFwdV3Policy_Hdim128_Kvec8B : public BlockFmhaV3PipelineDefaultPolicy
-{
-    template <typename Problem>
-    CK_TILE_DEVICE static constexpr auto GetAlignmentK()
-    {
-        // Only override for gfx11/gfx12 wave32 targets; otherwise use the default policy.
-#if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1200__) || defined(__gfx1201__)
-        using KDataType = remove_cvref_t<typename Problem::KDataType>;
-        constexpr index_t MaxReadSizeInBytes = 8;
-        return MaxReadSizeInBytes / sizeof(KDataType);
-#else
-        return BlockFmhaV3PipelineDefaultPolicy::template GetAlignmentK<Problem>();
-#endif
-    }
-
-    template <typename Problem>
-    CK_TILE_DEVICE static constexpr auto GetAlignmentV()
-    {
-        // Only override for gfx11/gfx12 wave32 targets; otherwise use the default policy.
-#if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1200__) || defined(__gfx1201__)
-        using VDataType = remove_cvref_t<typename Problem::VDataType>;
-        constexpr index_t MaxReadSizeInBytes = 8;
-        return MaxReadSizeInBytes / sizeof(VDataType);
-#else
-        return BlockFmhaV3PipelineDefaultPolicy::template GetAlignmentV<Problem>();
-#endif
-    }
-};
-
 struct FmhaFwdV3Policy_Hdim64_Wmma : public BlockFmhaV3PipelineWmmaPolicy
 {
 };
@@ -130,8 +101,8 @@ struct fmha_fwd_v3_kernel_traits_ext_hdim128
                                       fmha_mask,
                                       fmha_traits>;
 
-    using fmha_pipeline =
-        BlockFmhaFwdV3Pipeline<fmha_pipeline_problem, FmhaFwdV3Policy_Hdim128_Kvec8B>;
+    // With the gfx11/gfx12 alignment fix applied in CK's default policy, we can use default Policy here.
+    using fmha_pipeline = BlockFmhaFwdV3Pipeline<fmha_pipeline_problem>;
 
     using epilogue = Default2DEpilogue<
         Default2DEpilogueProblem<typename fmha_fwd_v3_problem_traits<date_type>::acc_dtype,

@@ -54,6 +54,10 @@ struct BlockFmhaV3PipelineDefaultPolicy
         using KDataType = remove_cvref_t<typename Problem::KDataType>;
 #if defined(__gfx950__)
         constexpr index_t MaxReadSizeInBytes = 16;
+#elif defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1200__) || defined(__gfx1201__)
+        // For wave32 targets running v3 FMHA with head_dim=128, we need KVector=4 (fp16/bf16)
+        // to satisfy: WarpSize * KVector >= kKPerBlock.
+        constexpr index_t MaxReadSizeInBytes = 8;
 #else
         constexpr index_t MaxReadSizeInBytes = 4;
 #endif
@@ -67,6 +71,8 @@ struct BlockFmhaV3PipelineDefaultPolicy
         using VDataType = remove_cvref_t<typename Problem::VDataType>;
 #if defined(__gfx950__)
         constexpr index_t MaxReadSizeInBytes = 16;
+#elif defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1200__) || defined(__gfx1201__)
+        constexpr index_t MaxReadSizeInBytes = 8;
 #else
         constexpr index_t MaxReadSizeInBytes = 4;
 #endif
