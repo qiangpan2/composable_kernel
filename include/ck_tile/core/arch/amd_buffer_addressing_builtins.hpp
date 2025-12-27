@@ -1226,7 +1226,8 @@ CK_TILE_DEVICE void async_buffer_load_dwordxn_v(void* smem,
                                                 bool_constant<pre_nop> = {})
 {
 #if defined(__HIP_DEVICE_COMPILE__) &&                                                      \
-    (defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1200__) || defined(__gfx1201__))
+    (defined(__gfx11__) || defined(__gfx12__) || defined(__gfx1100__) || defined(__gfx1101__) || \
+     defined(__gfx1200__) || defined(__gfx1201__))
     static_assert(num_dwords >= 1 && num_dwords <= 4,
                   "gfx11/gfx12 fallback path only supports 1..4 dword loads currently");
 

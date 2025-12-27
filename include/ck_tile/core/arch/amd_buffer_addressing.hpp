@@ -1358,7 +1358,8 @@ CK_TILE_DEVICE void async_buffer_load_dwordxn_v(void* smem,
                                                 bool_constant<pre_nop> = {})
 {
 #if defined(__HIP_DEVICE_COMPILE__) &&                                                      \
-    (defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1200__) || defined(__gfx1201__))
+    (defined(__gfx11__) || defined(__gfx12__) || defined(__gfx1100__) || defined(__gfx1101__) || \
+     defined(__gfx1200__) || defined(__gfx1201__))
     // gfx11/gfx12 (RDNA3/RDNA4): use a safe fallback (VGPR load -> LDS store).
     static_assert(num_dwords >= 1 && num_dwords <= 4,
                   "gfx11/gfx12 fallback path only supports 1..4 dword loads currently");
@@ -1423,6 +1424,16 @@ CK_TILE_DEVICE void async_buffer_load_dwordxn_v(void* smem,
     else if constexpr(num_dwords == 4)
     {
         CK_TILE_ASYNC_LOAD_WITH_INSTR("buffer_load_dwordx4");
+    }
+#elif defined(__gfx11__) || defined(__gfx12__) || defined(__gfx1100__) || defined(__gfx1101__) || \
+      defined(__gfx1200__) || defined(__gfx1201__)
+    else if constexpr(num_dwords == 3)
+    {
+        CK_TILE_ASYNC_LOAD_WITH_INSTR("buffer_load_b96");
+    }
+    else if constexpr(num_dwords == 4)
+    {
+        CK_TILE_ASYNC_LOAD_WITH_INSTR("buffer_load_b128");
     }
 #endif
     else
