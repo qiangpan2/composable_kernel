@@ -209,7 +209,9 @@ float fmha_fwd(fmha_fwd_traits traits, fmha_fwd_args args, const ck_tile::stream
     const bool is_swa = (traits.mask_type != mask_enum::no_mask) and
                         ((0 < args.window_size_left) or (0 < args.window_size_right));
     const bool can_dispatch_v3 =
-        (device_name.compare(0, 6, "gfx950") == 0) and
+        ((device_name.compare(0, 6, "gfx950") == 0) or
+         (device_name.compare(0, 5, "gfx11") == 0) or
+         (device_name.compare(0, 5, "gfx12") == 0)) and
         (traits.data_type.compare("fp16") == 0 or traits.data_type.compare("bf16") == 0) and
         traits.is_v_rowmajor and (traits.bias_type == bias_enum::no_bias) and
         (not traits.has_lse) and (not traits.has_dropout) and
@@ -1089,7 +1091,13 @@ class KernelComponentFactoryGfx950(
 
 
 class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
-    arch = ArchTrait("gfx12")
+    # Support both gfx11 (RDNA3) and gfx12 (RDNA4) - they share WMMA instructions
+    arch = ArchTrait(
+        "gfx11_12",
+        preprocessor_check="defined(__gfx11__) || defined(__gfx12__)",
+        device_name_check='device_name.compare(0, 5, "gfx11") == 0 || device_name.compare(0, 5, "gfx12") == 0',
+        filename_suffix="_gfx11_12",
+    )
 
     _DT_FP16_BF16 = ("fp16", "bf16")
     _DT_FP8_FP8BF16 = ("fp8", "fp8bf16")
@@ -1106,7 +1114,9 @@ class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
                 #                             bm0, bn0, bk0, bn1, bk1,
                 ( 32,  32) : [FmhaFwdTileSize( 64,  64,  16,  32,  32,   32,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
                 ( 64,  64) : [FmhaFwdTileSize( 64,  64,  32,  64,  32,   64,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
-                (128, 128) : [FmhaFwdTileSize( 64,  64,  32, 128,  32,  128,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
+                (128, 128) : [FmhaFwdTileSize( 64,  64,  32, 128,  32,  128,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1),
+                              # v3 tile: kN0==kK1 constraint (bn0==bk1)
+                              FmhaFwdTileSize( 64,  32,  32, 128,  32,  128,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
                 (192, 128) : [FmhaFwdTileSize( 64,  64,  32, 128,  32,  256,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
                 (256, 256) : [FmhaFwdTileSize( 64,  64,  32, 256,  32,  256,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
             }  # fmt: skip
@@ -1143,6 +1153,14 @@ class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
             ):
                 pipelines.append(FmhaFwdPipeline("qr", "row", "f", "f", "f", "f", logits, bias, lse, dropout, qscale, mask, skip, "f", sink))  # fmt: skip
                 pipelines.append(FmhaFwdPipeline("qr", "row", "t", "t", "t", "t", logits, bias, lse, dropout, qscale, mask, skip, "f", sink))  # fmt: skip
+
+            # qr_async_trload_v3 for gfx12 (WMMA path): only hdim=hdim_v=128, mask=no/causal, no logits_soft_cap
+            if (hdim, hdim_v) == (128, 128):
+                for mask in ["no", "causal"]:
+                    pipelines.append(FmhaFwdPipeline("qr_async_trload_v3", "row", "t", "t", "f", "f",
+                        F_logits="f", F_bias="no", F_lse="f", F_dropout="f",
+                        F_qscale=qscale, F_mask=mask, F_skip="f", F_trload="t", F_sink="f"))  # fmt: skip
+
         elif dtype in cls._DT_FP8_FP8BF16 or dtype in cls._DT_FP8FP32:
             # no need lse/dropout kernels
             for logits, qscale, mask, bias in itertools.product(
@@ -1151,6 +1169,26 @@ class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
                 pipelines.append(FmhaFwdPipeline("qr", "row", "f", "f", "f", "f", logits, bias, "f", "f", qscale, mask, "f", "f", "f"))  # fmt: skip
                 pipelines.append(FmhaFwdPipeline("qr", "row", "t", "t", "t", "t", logits, bias, "f", "f", qscale, mask, "f", "f", "f"))  # fmt: skip
         return pipelines
+
+    @classmethod
+    def get_rules(cls) -> List[CompatibilityRule]:
+        rules = CompatibilityRuleFactory.get_rules()
+
+        def check_tile_pipeline_v3(
+            problem_ctx: ProblemContext, kernel_ctx: KernelContext
+        ) -> bool:
+            # v3 pipeline requires kN0 == kK1 (i.e., bn0 == bk1)
+            is_v3_pipeline = kernel_ctx.pipeline.tag == "qr_async_trload_v3"
+            is_v3_tile = kernel_ctx.tile.F_bn0 == kernel_ctx.tile.F_bk1
+            if is_v3_pipeline and not is_v3_tile:
+                return False
+            if is_v3_tile and not is_v3_pipeline:
+                # Don't use v3 tile for non-v3 pipelines
+                return False
+            return True
+
+        rules.append(check_tile_pipeline_v3)
+        return rules
 
 
 class CustomFactory(KernelComponentFactoryGfx9, CompatibilityRuleFactoryGfx9):
@@ -1174,7 +1212,7 @@ def get_factory(target: str):
     if target.startswith("gfx9"):
         return KernelComponentFactoryGfx9
 
-    if target.startswith("gfx12"):
+    if target.startswith("gfx11") or target.startswith("gfx12"):
         return KernelComponentFactoryGfx12
 
     raise Exception(f"Unsupported device target {target}")
@@ -1364,9 +1402,7 @@ def write_fwd_api(
             api_pool.render("fmha_fwd_v3", filter_fn=accept_only_v3),
             FMHA_FWD_API_FOOTER_TEMPLATE.format(
                 F_is_v3_enabled=BOOL_MAP[
-                    # NOTE: enable v3 pipelines when ready
-                    # 0 < api_pool.get_num_traits(filter_fn=accept_only_v3)
-                    False
+                    0 < api_pool.get_num_traits(filter_fn=accept_only_v3)
                 ]
             ),
         ]

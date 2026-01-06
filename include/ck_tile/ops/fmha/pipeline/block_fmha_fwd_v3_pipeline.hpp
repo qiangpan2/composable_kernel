@@ -24,6 +24,14 @@
 #define CK_TILE_DISABLE_PACKED_FP32 0
 #endif
 
+// MFMA scheduling barrier - disabled for WMMA (gfx11/gfx12)
+#if defined(__gfx11__) || defined(__gfx12__)
+#define CK_TILE_SCHED_BARRIER_MFMA(count, mask) /* no-op for WMMA */
+#else
+#define CK_TILE_SCHED_BARRIER_MFMA(count, mask) \
+    __builtin_amdgcn_sched_group_barrier(0x008, count, mask)
+#endif
+
 #define WARP_ID 0
 #define LANE_ID 0
 
@@ -54,7 +62,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/true>
             if constexpr(Phase == 0)
             {
                 static_for<0, 8, 1>{}([&](auto) {
-                    __builtin_amdgcn_sched_group_barrier(0x008, 1, 0); // MFMA
+                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x200, 2, 0); // TRANS
                     __builtin_amdgcn_sched_group_barrier(0x002, 2, 0); // VALU
                 });
@@ -70,7 +78,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/true>
                 __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
 #endif
                 static_for<0, 8, 1>{}([&](auto) {
-                    __builtin_amdgcn_sched_group_barrier(0x008, 1, 0); // MFMA
+                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
                 });
             }
@@ -90,7 +98,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/true>
             else if constexpr(Phase == 1)
             {
                 static_for<0, 8, 1>{}([&](auto) {
-                    __builtin_amdgcn_sched_group_barrier(0x008, 1, 0); // MFMA
+                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x200, 2, 0); // TRANS
                     __builtin_amdgcn_sched_group_barrier(0x002, 2, 0); // VALU
                 });
@@ -106,7 +114,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/true>
                 __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
 #endif
                 static_for<0, 8, 1>{}([&](auto) {
-                    __builtin_amdgcn_sched_group_barrier(0x008, 1, 0); // MFMA
+                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
                 });
             }
@@ -128,7 +136,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/false>
             if constexpr(Phase == 0)
             {
                 static_for<0, 8, 1>{}([&](auto) {
-                    __builtin_amdgcn_sched_group_barrier(0x008, 1, 0); // MFMA
+                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x200, 2, 0); // TRANS
                     __builtin_amdgcn_sched_group_barrier(0x002, 2, 0); // VALU
                 });
@@ -144,7 +152,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/false>
                 __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
 #endif
                 static_for<0, 8, 1>{}([&](auto) {
-                    __builtin_amdgcn_sched_group_barrier(0x008, 1, 0); // MFMA
+                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
                 });
             }
@@ -164,7 +172,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/false>
             else if constexpr(Phase == 1)
             {
                 static_for<0, 8, 1>{}([&](auto) {
-                    __builtin_amdgcn_sched_group_barrier(0x008, 1, 0); // MFMA
+                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x200, 2, 0); // TRANS
                     __builtin_amdgcn_sched_group_barrier(0x002, 2, 0); // VALU
                 });
@@ -180,7 +188,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/false>
                 __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
 #endif
                 static_for<0, 8, 1>{}([&](auto) {
-                    __builtin_amdgcn_sched_group_barrier(0x008, 1, 0); // MFMA
+                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
                 });
             }
@@ -699,7 +707,12 @@ struct BlockFmhaFwdV3Pipeline
         constexpr int V_mem_su_ld_insts = v_dram_window.get_num_of_access();
 
         auto K_mem_load = [&](auto k_lds_write_idx) {
+#if defined(__gfx11__) || defined(__gfx12__)
+            auto k_tile_tmp = load_tile(k_dram_window);
+            store_tile(k_lds_window_store(k_lds_write_idx), k_tile_tmp);
+#else
             async_load_tile_raw(k_lds_window_store(k_lds_write_idx), k_dram_window);
+#endif
 
             /// FIXME: use the future-predicting method to move the window
             // move K tile windows
@@ -711,7 +724,12 @@ struct BlockFmhaFwdV3Pipeline
         };
 
         auto V_mem_load = [&](auto v_lds_write_idx) {
+#if defined(__gfx11__) || defined(__gfx12__)
+            auto v_tile_tmp = load_tile(v_dram_window);
+            store_tile(v_lds_window_store(v_lds_write_idx), v_tile_tmp);
+#else
             async_load_tile_raw(v_lds_window_store(v_lds_write_idx), v_dram_window);
+#endif
 
             /// FIXME: use the future-predicting method to move the window
             move_tile_window(v_dram_window, {kK1, 0});
