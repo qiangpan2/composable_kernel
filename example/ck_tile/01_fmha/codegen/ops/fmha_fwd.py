@@ -1091,12 +1091,17 @@ class KernelComponentFactoryGfx950(
 
 
 class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
-    # Support both gfx11 (RDNA3) and gfx12 (RDNA4) - they share WMMA instructions
+    # gfx12 (RDNA4)
+    #
+    # NOTE: Do NOT use a combined arch tag like `ck_tile::gfx11_12_t`.
+    # `ck_tile` only defines per-family tags (`gfx11_t`, `gfx12_t`, etc.) in
+    # `include/ck_tile/core/arch/arch.hpp`, and the tag participates in template
+    # dispatch for WMMA backends.
     arch = ArchTrait(
-        "gfx11_12",
-        preprocessor_check="defined(__gfx11__) || defined(__gfx12__)",
-        device_name_check='device_name.compare(0, 5, "gfx11") == 0 || device_name.compare(0, 5, "gfx12") == 0',
-        filename_suffix="_gfx11_12",
+        "gfx12",
+        preprocessor_check="defined(__gfx12__)",
+        device_name_check='device_name.compare(0, 5, "gfx12") == 0',
+        filename_suffix="_gfx12",
     )
 
     _DT_FP16_BF16 = ("fp16", "bf16")
@@ -1191,6 +1196,17 @@ class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
         return rules
 
 
+class KernelComponentFactoryGfx11(KernelComponentFactoryGfx12):
+    # gfx11 (RDNA3) - shares WMMA shape with gfx12, but needs its own arch tag
+    # for correct backend selection.
+    arch = ArchTrait(
+        "gfx11",
+        preprocessor_check="defined(__gfx11__)",
+        device_name_check='device_name.compare(0, 5, "gfx11") == 0',
+        filename_suffix="_gfx11",
+    )
+
+
 class CustomFactory(KernelComponentFactoryGfx9, CompatibilityRuleFactoryGfx9):
     @classmethod
     def get_hdim_tile_size_dict(cls, dtype: str) -> Optional[dict]:
@@ -1212,7 +1228,9 @@ def get_factory(target: str):
     if target.startswith("gfx9"):
         return KernelComponentFactoryGfx9
 
-    if target.startswith("gfx11") or target.startswith("gfx12"):
+    if target.startswith("gfx11"):
+        return KernelComponentFactoryGfx11
+    if target.startswith("gfx12"):
         return KernelComponentFactoryGfx12
 
     raise Exception(f"Unsupported device target {target}")
