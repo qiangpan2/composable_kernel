@@ -467,6 +467,25 @@ struct BlockFmhaV3PipelineDefaultPolicy
         }();
 
         constexpr index_t SingleVSize = [&]() {
+#if defined(__gfx11__) || defined(__gfx12__)
+            // Wave32: Calculate based on actual MakeVLdsLoadBlockDescriptor layout
+            // The V LDS layout uses NumIssues/NumWarps/Lanes pattern with swapped kN1/kK1
+            using VDataType              = remove_cvref_t<typename Problem::VDataType>;
+            constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1; // Note: swapped in V
+            constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1; // Note: swapped in V
+            constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;
+            constexpr index_t WarpSize   = ck_tile::get_warp_size(); // 32 for wave32
+            constexpr index_t KVector    = GetAlignmentV<Problem>();
+            constexpr index_t kPad = kVLdsPadInBytes / sizeof(VDataType);
+
+            static_assert(WarpSize * KVector >= kKPerBlock && WarpSize * KVector % kKPerBlock == 0);
+            constexpr index_t LanesPerK  = kKPerBlock / KVector;
+            constexpr index_t LaneGroups = WarpSize / LanesPerK;
+            constexpr index_t NumIssues  = kNPerBlock / (LaneGroups * NumWarps);
+
+            return NumIssues * NumWarps * (WarpSize * KVector + kPad);
+#else
+            // Wave64: Original bank-conflict-free layout
             using VDataType                = remove_cvref_t<typename Problem::VDataType>;
             constexpr index_t Banks        = get_n_lds_banks();
             constexpr index_t PixelsPerRow = Banks * 4 / sizeof(VDataType);
@@ -479,6 +498,7 @@ struct BlockFmhaV3PipelineDefaultPolicy
             static_assert(kKPerBlock % kKPack == 0);
 
             return (kKPerBlock / kKPack) * (kNPerBlock / NPerRow) * (PixelsPerRow + kKPack);
+#endif
         }();
 
         return max(SingleKSize, SingleVSize);
