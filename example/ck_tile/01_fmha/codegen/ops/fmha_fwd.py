@@ -24,6 +24,7 @@ from codegen.cpp_symbol_map import (
     get_mask_map,
     get_mask_cpp_type,
     get_mask_cpp_check_expr,
+    get_pipeline_cpp_type,
     QSCALE_CHECK_MAP,
     QSCALE_MAP,
 )
@@ -698,7 +699,7 @@ class FmhaFwdKernel:
             F_mask=get_mask_cpp_type(self.F_pipeline.F_mask),
             F_mode=MODE_MAP[self.F_mode],
             F_trload=BOOL_MAP[self.F_pipeline.F_trload],
-            F_pipeline=PIPELINE_MAP[self.F_pipeline.tag],
+            F_pipeline=get_pipeline_cpp_type(self.F_pipeline.tag, self.F_arch.name),
             F_kernel=self._get_cpp_kernel_class_name(self.F_pipeline.tag),
             F_kargs_creator=self._get_cpp_kargs_creator_func_name(self.F_pipeline.tag),
             F_sink=BOOL_MAP[self.F_pipeline.F_sink],
@@ -1120,8 +1121,8 @@ class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
                 ( 32,  32) : [FmhaFwdTileSize( 64,  64,  16,  32,  32,   32,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
                 ( 64,  64) : [FmhaFwdTileSize( 64,  64,  32,  64,  32,   64,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
                 (128, 128) : [FmhaFwdTileSize( 64,  64,  32, 128,  32,  128,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1),
-                              # v3 tile: kN0==kK1 constraint (bn0==bk1), kN1=32 for wave32 SMEM constraint
-                              FmhaFwdTileSize( 64,  32,  32,  32,  32,  128,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
+                              # v3 WMMA tile: 8 warps (4x2), kK0=128 (k0_loops=1), kN0==kK1=32, 256 threads (NumWarpGroups=2)
+                              FmhaFwdTileSize( 64,  32, 128,  32,  32,  128,  4, 2, 1,  4, 2, 1,  16, 16, 16,  16, 16, 16,  -1)],
                 (192, 128) : [FmhaFwdTileSize( 64,  64,  32, 128,  32,  256,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
                 (256, 256) : [FmhaFwdTileSize( 64,  64,  32, 256,  32,  256,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
             }  # fmt: skip
@@ -1182,9 +1183,17 @@ class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
         def check_tile_pipeline_v3(
             problem_ctx: ProblemContext, kernel_ctx: KernelContext
         ) -> bool:
-            # v3 pipeline requires kN0 == kK1 (i.e., bn0 == bk1)
+            # v3 WMMA pipeline requirements:
+            # 1. kN0 == kK1 (bn0 == bk1) for v3 pipeline constraint
+            # 2. kK0 == 128 (bk0 == 128) for k0_loops == 1
+            # 3. 8 warps (rm0*rn0 == 8) for NumWarpGroups == 2
             is_v3_pipeline = kernel_ctx.pipeline.tag == "qr_async_trload_v3"
-            is_v3_tile = kernel_ctx.tile.F_bn0 == kernel_ctx.tile.F_bk1
+            tile = kernel_ctx.tile
+            is_v3_tile = (
+                tile.F_bn0 == tile.F_bk1 and  # kN0 == kK1
+                tile.F_bk0 == 128 and         # k0_loops = 128/128 = 1
+                tile.F_rm0 * tile.F_rn0 == 8  # 8 warps for NumWarpGroups = 256/128 = 2
+            )
             if is_v3_pipeline and not is_v3_tile:
                 return False
             if is_v3_tile and not is_v3_pipeline:

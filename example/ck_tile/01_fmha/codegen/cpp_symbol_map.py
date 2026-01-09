@@ -135,7 +135,18 @@ PIPELINE_MAP = {
     "qs": "ck_tile::BlockFmhaPipelineQSKSVS",
     "qr_async_trload": "ck_tile::BlockFmhaPipelineQRKSVSAsyncTrload",
     "qr_async_trload_v3": "ck_tile::BlockFmhaFwdV3Pipeline",
+    "qr_async_trload_v3_wmma": "ck_tile::BlockFmhaFwdV3WmmaPipeline",
 }
+
+
+def get_pipeline_cpp_type(tag: str, arch_name: str = "") -> str:
+    """Get the C++ pipeline type based on tag and architecture.
+    
+    For qr_async_trload_v3 on gfx11/gfx12, use the WMMA-optimized pipeline.
+    """
+    if tag == "qr_async_trload_v3" and arch_name in ("gfx11", "gfx12"):
+        return PIPELINE_MAP["qr_async_trload_v3_wmma"]
+    return PIPELINE_MAP[tag]
 
 PIPELINE_ENUM_MAP = {
     "qr": "ck_tile::BlockFmhaPipelineEnum::QRKSVS",
