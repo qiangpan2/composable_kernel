@@ -524,7 +524,14 @@ struct BlockFmhaFwdV3Pipeline
 
             decltype(load_tile(k_lds_window_load(number<0>{}))) k_tile;
 
+#if defined(__gfx11__) || defined(__gfx12__)
+            // Wave32: Use regular load - V data already in correct layout
+            // WMMA 16x16x16 has symmetric A/B distribution (kAMLane == kBNLane == 16)
+            decltype(load_tile(v_lds_window_load(number<0>{}))) v_tile;
+#else
+            // Wave64: Use transpose load for optimal performance
             decltype(load_tile_transpose(v_lds_window_load(number<0>{}))) v_tile;
+#endif
         } kv_tile;
 
         union sp_compute_type
@@ -736,7 +743,13 @@ struct BlockFmhaFwdV3Pipeline
         };
 
         auto V_lds_load = [&](auto v_lds_read_idx) {
+#if defined(__gfx11__) || defined(__gfx12__)
+            // Wave32: Use regular load (WMMA has symmetric A/B distribution)
+            kv_tile.v_tile = load_tile(v_lds_window_load(v_lds_read_idx));
+#else
+            // Wave64: Use transpose load
             kv_tile.v_tile = load_tile_transpose(v_lds_window_load(v_lds_read_idx));
+#endif
         };
 
         decltype(m) m_old;
