@@ -191,7 +191,14 @@ struct BlockFmhaV3PipelineDefaultPolicy
     {
         using namespace ck_tile;
 
-        using BlockGemm       = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
+        using BlockGemm = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
+
+#if defined(__gfx11__) || defined(__gfx12__)
+        // Wave32: Use A-side distribution encoding directly to bypass transpose constraint
+        // The transpose ValidationTraits fails for wave32 due to different lane distribution
+        return make_static_tile_distribution(BlockGemm::MakeABlockDistributionEncode());
+#else
+        // Wave64: Define variables only in this branch to avoid unused variable warnings
         constexpr auto config = BlockGemm::Policy::template GetWarpGemmMWarpNWarp<Problem>();
         using WarpGemm        = remove_cvref_t<decltype(config.template at<0>())>;
 
@@ -204,11 +211,6 @@ struct BlockFmhaV3PipelineDefaultPolicy
         constexpr index_t NIterPerWarp = kNPerBlock / (NWarp * WarpGemm::kN);
         constexpr index_t KIterPerWarp = kKPerBlock / WarpGemm::kK;
 
-#if defined(__gfx11__) || defined(__gfx12__)
-        // Wave32: Use A-side distribution encoding directly to bypass transpose constraint
-        // The transpose ValidationTraits fails for wave32 due to different lane distribution
-        return make_static_tile_distribution(BlockGemm::MakeABlockDistributionEncode());
-#else
         constexpr auto v_block_outer_dstr_encoding =
             tile_distribution_encoding<sequence<MWarp>,
                                        tuple<sequence<NIterPerWarp, NWarp>, sequence<KIterPerWarp>>,
