@@ -8,6 +8,7 @@
 #include "ck_tile/ops/gemm/block/block_gemm_areg_breg_creg_v2_custom_policy.hpp"
 #include "ck_tile/ops/gemm/block/block_gemm_problem.hpp"
 #include "ck_tile/ops/gemm/pipeline/tile_gemm_shape.hpp"
+#include "ck_tile/ops/gemm/warp/warp_gemm_dispatcher.hpp"
 
 namespace ck_tile {
 
@@ -240,6 +241,17 @@ struct BlockFmhaV3PipelineDefaultPolicy
                                            typename Problem::BlockFmhaShape::Gemm0WarpTile>>;
 
         constexpr auto warp_gemm = []() {
+#if defined(__gfx11__) || defined(__gfx12__)
+            // WMMA path: use WarpGemmDispatcher to auto-select WMMA 16x16x16
+            return WarpGemmDispatcher<typename Problem::QDataType,
+                                      typename Problem::KDataType,
+                                      typename Problem::SaccDataType,
+                                      Problem::BlockFmhaShape::Gemm0WarpTile::at(number<0>{}),
+                                      Problem::BlockFmhaShape::Gemm0WarpTile::at(number<1>{}),
+                                      Problem::BlockFmhaShape::Gemm0WarpTile::at(number<2>{}),
+                                      true>{};  // TransposeC
+#else
+            // MFMA path: use hardcoded MFMA warp gemm types
             if constexpr(std::is_same_v<typename Problem::QDataType, half_t> &&
                          std::is_same_v<typename Problem::KDataType, half_t> &&
                          std::is_same_v<typename Problem::SaccDataType, float>)
@@ -256,6 +268,7 @@ struct BlockFmhaV3PipelineDefaultPolicy
                 /// WarpGemmMfmaBf16Bf16F32M32N32K16SwizzleBTransposedCDistribution here
                 return WarpGemmMfmaBf16Bf16F32M32N32K16TransposedCDistribution<>{};
             }
+#endif
         }();
 
         using BlockGemmPolicy =
@@ -286,6 +299,7 @@ struct BlockFmhaV3PipelineDefaultPolicy
                                            typename Problem::BlockFmhaShape::Gemm1WarpTile>>;
         /// NOTICE: in order to use load_tile_transpose() later for V tiles, we have to pass
         /// WGAttrNumAccessEnum::Double instead of WGAttrNumAccessEnum::Single
+        /// For gfx11/12 (WMMA), use Single as there's no EDouble specialization for WMMA 16x16x16
         using WarpGemm = WarpGemmDispatcher<typename Problem::PDataType,
                                             typename Problem::VDataType,
                                             typename Problem::OaccDataType,
@@ -295,7 +309,11 @@ struct BlockFmhaV3PipelineDefaultPolicy
                                             true,
                                             false,
                                             false,
+#if defined(__gfx11__) || defined(__gfx12__)
+                                            WGAttrNumAccessEnum::Single>;
+#else
                                             WGAttrNumAccessEnum::Double>;
+#endif
 
         using BlockGemmPolicy =
             BlockGemmARegBRegCRegV2CustomPolicy<typename Problem::PDataType,
