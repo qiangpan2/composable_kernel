@@ -204,6 +204,11 @@ struct BlockFmhaV3PipelineDefaultPolicy
         constexpr index_t NIterPerWarp = kNPerBlock / (NWarp * WarpGemm::kN);
         constexpr index_t KIterPerWarp = kKPerBlock / WarpGemm::kK;
 
+#if defined(__gfx11__) || defined(__gfx12__)
+        // Wave32: Use A-side distribution encoding directly to bypass transpose constraint
+        // The transpose ValidationTraits fails for wave32 due to different lane distribution
+        return make_static_tile_distribution(BlockGemm::MakeABlockDistributionEncode());
+#else
         constexpr auto v_block_outer_dstr_encoding =
             tile_distribution_encoding<sequence<MWarp>,
                                        tuple<sequence<NIterPerWarp, NWarp>, sequence<KIterPerWarp>>,
@@ -222,6 +227,7 @@ struct BlockFmhaV3PipelineDefaultPolicy
                                           typename Problem::VDataType>::TransposedDstrEncode{});
 
         return v_block_dstr;
+#endif
     }
 
     template <typename Problem>
