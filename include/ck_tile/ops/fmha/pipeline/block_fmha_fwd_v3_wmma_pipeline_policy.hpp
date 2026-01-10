@@ -97,7 +97,6 @@ struct BlockFmhaV3WmmaPipelinePolicy
 
         constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32
         constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kK0;  // 128
-        constexpr index_t kBlockSize = Problem::kBlockSize;           // 256
         constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
         constexpr index_t WarpSize   = 32;  // wave32 fixed
 
@@ -140,7 +139,6 @@ struct BlockFmhaV3WmmaPipelinePolicy
         // V tile layout: [kK1, kN1] in memory (K is seqlen, N is hdim)
         constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32 (seqlen)
         constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32 (hdim)
-        constexpr index_t kBlockSize = Problem::kBlockSize;           // 256
         constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
         constexpr index_t WarpSize   = 32;  // wave32 fixed
 
@@ -310,7 +308,6 @@ struct BlockFmhaV3WmmaPipelinePolicy
 
         constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32
         constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kK0;  // 128
-        constexpr index_t kBlockSize = Problem::kBlockSize;           // 256
         constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
         constexpr index_t WarpSize   = 32;
 
@@ -342,9 +339,7 @@ struct BlockFmhaV3WmmaPipelinePolicy
             number<KVector>{},
             number<1>{});
 
-        // Transform to [NumIssues, NumWarps, Lanes] format for async copy compatibility
-        constexpr index_t NumIssues = NPerWarp * KIssues;  // 8
-
+        // Transform to [NPerWarp*KIssues, NumWarps, Lanes] format for async copy compatibility
         constexpr auto k_lds_block_desc_issues_warps_lanes = transform_tensor_descriptor(
             k_lds_block_desc_0,
             make_tuple(make_merge_transform(make_tuple(number<NPerWarp>{}, number<KIssues>{})),
@@ -411,7 +406,6 @@ struct BlockFmhaV3WmmaPipelinePolicy
         // V layout: [kK1, kN1] in memory
         constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32 (seqlen)
         constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32 (hdim)
-        constexpr index_t kBlockSize = Problem::kBlockSize;           // 256
         constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
         constexpr index_t WarpSize   = 32;
 
