@@ -14,7 +14,7 @@
 #include "ck_tile/core.hpp"
 #include "ck_tile/ops/fmha/block/block_attention_bias_enum.hpp"
 #include "ck_tile/ops/fmha/block/block_attention_quant_scale_enum.hpp"
-#include "ck_tile/ops/fmha/pipeline/block_fmha_fwd_v3_pipeline_default_policy.hpp"
+#include "ck_tile/ops/fmha/pipeline/block_fmha_fwd_v3_wmma_pipeline_policy.hpp"
 #include "ck_tile/ops/reduce/block/block_reduce.hpp"
 
 #define ENABLE_ASM_MARKER_WMMA 1
@@ -257,7 +257,7 @@ CK_TILE_DEVICE fp32x2_t pk_mul_f32_wmma(fp32x2_t lhs, fp32x2_t rhs)
 
 /// WMMA v3 Pipeline for gfx11/gfx12 (RDNA3/RDNA4)
 /// This is optimized for WMMA 16x16x16 instructions with wave32.
-template <typename Problem_, typename Policy_ = BlockFmhaV3PipelineDefaultPolicy>
+template <typename Problem_, typename Policy_ = BlockFmhaV3WmmaPipelinePolicy>
 struct BlockFmhaFwdV3WmmaPipeline
 {
     using Problem             = ck_tile::remove_cvref_t<Problem_>;
