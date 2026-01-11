@@ -278,7 +278,9 @@ struct BlockFmhaFwdV3WmmaPipeline
     using VLayout = remove_cvref_t<typename BlockFmhaShape::VLayout>;
     static_assert(std::is_same_v<VLayout, ck_tile::tensor_layout::gemm::RowMajor>);
 
-    static constexpr ck_tile::index_t kBlockSize = Problem::kBlockSize;
+    // WMMA uses wave32, hardcode kBlockSize to avoid host-side get_warp_size() returning 64
+    // NumWarps * 32 (wave32) instead of NumWarps * get_warp_size()
+    static constexpr ck_tile::index_t kBlockSize = BlockFmhaShape::NumWarps * 32;
 
     static constexpr ck_tile::index_t kM0           = BlockFmhaShape::kM0;
     static constexpr ck_tile::index_t kN0           = BlockFmhaShape::kN0;
