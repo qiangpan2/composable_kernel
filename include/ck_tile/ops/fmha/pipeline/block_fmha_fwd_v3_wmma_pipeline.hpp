@@ -230,7 +230,8 @@ CK_TILE_DEVICE float mul_impl_vv_wmma(float lhs, float rhs)
 CK_TILE_DEVICE fp16x2_t cvt_pk_fp16_f32_wmma(float a, float b)
 {
     // Hardware accelerated packed fp32->fp16 conversion (RTZ)
-    return __builtin_amdgcn_cvt_pkrtz(a, b);
+    // bit_cast between __fp16 and _Float16 vector types (same underlying representation)
+    return ck_tile::bit_cast<fp16x2_t>(__builtin_amdgcn_cvt_pkrtz(a, b));
 }
 
 CK_TILE_DEVICE bf16x2_t cvt_pk_bf16_f32_wmma(float a, float b)
