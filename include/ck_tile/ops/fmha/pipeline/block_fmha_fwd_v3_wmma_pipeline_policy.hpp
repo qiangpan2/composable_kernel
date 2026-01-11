@@ -210,9 +210,8 @@ struct BlockFmhaV3WmmaPipelinePolicy
     {
         using namespace ck_tile;
         using BlockGemm = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
-        // Wave32: Use A-side distribution encoding directly to bypass transpose constraint
-        // WMMA 16x16x16 has symmetric A/B distribution (kAMLane == kBNLane == 16)
-        return make_static_tile_distribution(BlockGemm::MakeABlockDistributionEncode());
+        // V is B matrix in GEMM1 (P x V = O), must use B distribution encoding
+        return make_static_tile_distribution(BlockGemm::MakeBBlockDistributionEncode());
     }
 
     // ========================================================================
