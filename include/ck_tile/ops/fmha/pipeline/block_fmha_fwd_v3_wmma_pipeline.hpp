@@ -606,10 +606,15 @@ struct BlockFmhaFwdV3WmmaPipeline
                              Policy::template MakeKDramTileDistribution<Problem>());
         k_dram_window.init_raw();
 
+        // Get the original hdim offset from the input V window (for hdim slicing support)
+        // WMMA v3 (bn1=32, hdim_v=128) needs 4 tiles, each with different hdim offset
+        const auto v_origin = v_dram_block_window_tmp.get_window_origin();
+        const index_t v_hdim_offset = v_origin.at(number<1>{}); // hdim offset (i_n1 * kN1)
+
         auto v_dram_window =
             make_tile_window(v_dram_block_window_tmp.get_bottom_tensor_view(),
                              v_dram_block_window_tmp.get_window_lengths(),
-                             {seqlen_k_start, 0}, // TODO: hdim split?
+                             {seqlen_k_start, v_hdim_offset},
                              Policy::template MakeVDramTileDistribution<Problem>());
         v_dram_window.init_raw();
 
