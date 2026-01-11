@@ -269,6 +269,7 @@ class FmhaFwdApiTrait:
     pipeline_tag: str
     # sync with fmha_fwd_traits<>, to generate fallback calls
     hdim: str
+    hdim_v: str  # actual V head dimension
     dtype: str  # data type
     mode: str  # value from MODE_MAP
     bm0: int  # tile size along q seqlen (block size)
@@ -481,7 +482,7 @@ class FmhaFwdApiPool:
         self.pool = OrderedDict()
 
     def register_traits(self, trait: FmhaFwdApiTrait) -> None:
-        hdim = trait.hdim, trait.bn1
+        hdim = trait.hdim, trait.hdim_v  # FIX: use hdim_v instead of bn1 (tile size)
         ts = (
             self.pool.setdefault(trait.arch, OrderedDict())
             .setdefault(trait.dtype, OrderedDict())
@@ -637,6 +638,7 @@ class FmhaFwdTileSize:
 class FmhaFwdKernel:
     F_arch: ArchTrait
     F_hdim: int  # hdim
+    F_hdim_v: int  # hdim_v - actual V head dimension
     F_dtype: str  # data type
     F_mode: str  # value from MODE_MAP
     F_tile: FmhaFwdTileSize
@@ -724,6 +726,7 @@ class FmhaFwdKernel:
             arch=self.F_arch,
             pipeline_tag=self.F_pipeline.tag,
             hdim=str(self.F_hdim),
+            hdim_v=str(self.F_hdim_v),
             dtype=self.F_dtype,
             mode=self.F_mode,
             bm0=self.F_tile.F_bm0,
@@ -784,6 +787,7 @@ def create_kernel(
         F_dtype=problem_ctx.dtype,
         F_mode=problem_ctx.mode,
         F_hdim=problem_ctx.hdim,
+        F_hdim_v=problem_ctx.hdim_v,
         F_tile=kernel_ctx.tile,
         F_pipeline=kernel_ctx.pipeline,
     )
