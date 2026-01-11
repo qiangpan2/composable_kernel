@@ -339,16 +339,17 @@ struct BlockFmhaV3WmmaPipelinePolicy
             number<KVector>{},
             number<1>{});
 
-        // Transform to [NPerWarp*KIssues, NumWarps, Lanes] format for async copy compatibility
-        constexpr auto k_lds_block_desc_issues_warps_lanes = transform_tensor_descriptor(
+        // Transform to 2D [kNPerBlock, kKPerBlock] format to match DRAM tile distribution
+        // Note: Must output 2D to be compatible with store_tile from 2D DRAM tile
+        constexpr auto k_lds_block_desc_2d = transform_tensor_descriptor(
             k_lds_block_desc_0,
-            make_tuple(make_merge_transform(make_tuple(number<NPerWarp>{}, number<KIssues>{})),
-                       make_pass_through_transform(number<NumWarps>{}),
-                       make_merge_transform(make_tuple(number<WarpSize>{}, number<KVector>{}))),
-            make_tuple(sequence<0, 2>{}, sequence<1>{}, sequence<3, 4>{}),
-            make_tuple(sequence<0>{}, sequence<1>{}, sequence<2>{}));
+            make_tuple(
+                make_merge_transform(make_tuple(number<NPerWarp>{}, number<NumWarps>{})),
+                make_merge_transform(make_tuple(number<KIssues>{}, number<WarpSize>{}, number<KVector>{}))),
+            make_tuple(sequence<0, 1>{}, sequence<2, 3, 4>{}),
+            make_tuple(sequence<0>{}, sequence<1>{}));
 
-        return k_lds_block_desc_issues_warps_lanes;
+        return k_lds_block_desc_2d;
     }
 
     template <typename Problem>
@@ -432,16 +433,17 @@ struct BlockFmhaV3WmmaPipelinePolicy
             number<KVector>{},
             number<1>{});
 
-        constexpr auto v_lds_block_desc_issues_warps_lanes = transform_tensor_descriptor(
+        // Transform to 2D [kNPerBlock, kKPerBlock] format to match DRAM tile distribution
+        // Note: Must output 2D to be compatible with store_tile from 2D DRAM tile
+        constexpr auto v_lds_block_desc_2d = transform_tensor_descriptor(
             v_lds_block_desc_0,
-            make_tuple(make_pass_through_transform(number<NumIssues>{}),
-                       make_pass_through_transform(number<NumWarps>{}),
-                       make_merge_transform(make_tuple(
-                           number<LaneGroups>{}, number<LanesPerK>{}, number<KVector>{}))),
-            make_tuple(sequence<0>{}, sequence<2>{}, sequence<1, 3, 4>{}),
-            make_tuple(sequence<0>{}, sequence<1>{}, sequence<2>{}));
+            make_tuple(
+                make_merge_transform(make_tuple(number<NumIssues>{}, number<LaneGroups>{}, number<NumWarps>{})),
+                make_merge_transform(make_tuple(number<LanesPerK>{}, number<KVector>{}))),
+            make_tuple(sequence<0, 1, 2>{}, sequence<3, 4>{}),
+            make_tuple(sequence<0>{}, sequence<1>{}));
 
-        return v_lds_block_desc_issues_warps_lanes;
+        return v_lds_block_desc_2d;
     }
 
     template <typename Problem>
