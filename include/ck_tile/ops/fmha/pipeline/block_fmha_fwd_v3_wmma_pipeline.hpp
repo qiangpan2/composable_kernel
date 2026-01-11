@@ -864,23 +864,15 @@ struct BlockFmhaFwdV3WmmaPipeline
             if constexpr(gemm_idx == 0)
             {
                 clear_tile(sp(sp_reg_idx).sp_compute); // initialize C
-                gemm_0(sp(sp_reg_idx).sp_compute,
-                       get_slice_tile(q_tile,
-                                      sequence<0, (k0_loops - 1) * kK0>{},
-                                      sequence<kM0, k0_loops * kK0>{}),
-                       get_slice_tile(kv_tile.k_tile,
-                                      sequence<0, (k0_loops - 1) * kK0>{},
-                                      sequence<kN0, k0_loops * kK0>{}));
+                // Note: Since k0_loops == 1 (v3 constraint), slice is full tile access
+                // Removed get_slice_tile to avoid tile distribution incompatibility with WMMA
+                gemm_0(sp(sp_reg_idx).sp_compute, q_tile, kv_tile.k_tile);
             }
             else
             {
-                gemm_1(o_acc,
-                       get_slice_tile(sp(sp_reg_idx).p,
-                                      sequence<0, (k1_loops - 1) * kK1>{},
-                                      sequence<kM0, k1_loops * kK1>{}),
-                       get_slice_tile(kv_tile.v_tile,
-                                      sequence<0, (k1_loops - 1) * kK1>{},
-                                      sequence<kN1, k1_loops * kK1>{}));
+                // Note: Since k1_loops == 1 (v3 constraint), slice is full tile access
+                // Removed get_slice_tile to avoid tile distribution incompatibility with WMMA
+                gemm_1(o_acc, sp(sp_reg_idx).p, kv_tile.v_tile);
             }
         };
 
@@ -888,23 +880,15 @@ struct BlockFmhaFwdV3WmmaPipeline
             if constexpr(gemm_idx == 0)
             {
                 clear_tile(sp(sp_reg_idx).sp_compute); // initialize C
-                gemm_0(sp(sp_reg_idx).sp_compute,
-                       get_slice_tile(q_tile,
-                                      sequence<0, (k0_loops - 1) * kK0>{},
-                                      sequence<kM0, k0_loops * kK0>{}),
-                       get_slice_tile(kv_tile.k_tile,
-                                      sequence<0, (k0_loops - 1) * kK0>{},
-                                      sequence<kN0, k0_loops * kK0>{}));
+                // Note: Since k0_loops == 1 (v3 constraint), slice is full tile access
+                // Removed get_slice_tile to avoid tile distribution incompatibility with WMMA
+                gemm_0(sp(sp_reg_idx).sp_compute, q_tile, kv_tile.k_tile);
             }
             else
             {
-                gemm_1(o_acc,
-                       get_slice_tile(sp(sp_reg_idx).p,
-                                      sequence<0, (k1_loops - 1) * kK1>{},
-                                      sequence<kM0, k1_loops * kK1>{}),
-                       get_slice_tile(kv_tile.v_tile,
-                                      sequence<0, (k1_loops - 1) * kK1>{},
-                                      sequence<kN1, k1_loops * kK1>{}));
+                // Note: Since k1_loops == 1 (v3 constraint), slice is full tile access
+                // Removed get_slice_tile to avoid tile distribution incompatibility with WMMA
+                gemm_1(o_acc, sp(sp_reg_idx).p, kv_tile.v_tile);
                 fmha_alu0(number<1>{} - sp_reg_idx);
             }
         };
