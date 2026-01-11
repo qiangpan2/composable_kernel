@@ -41,7 +41,7 @@ struct BlockFmhaV3WmmaPipelinePolicy
     }
 
     template <typename Problem>
-    CK_TILE_DEVICE static constexpr auto GetAlignmentK()
+    CK_TILE_HOST_DEVICE static constexpr auto GetAlignmentK()
     {
         using namespace ck_tile;
         using KDataType = remove_cvref_t<typename Problem::KDataType>;
@@ -51,7 +51,7 @@ struct BlockFmhaV3WmmaPipelinePolicy
     }
 
     template <typename Problem>
-    CK_TILE_DEVICE static constexpr auto GetAlignmentV()
+    CK_TILE_HOST_DEVICE static constexpr auto GetAlignmentV()
     {
         using namespace ck_tile;
         using VDataType = remove_cvref_t<typename Problem::VDataType>;
@@ -497,7 +497,7 @@ struct BlockFmhaV3WmmaPipelinePolicy
     // ========================================================================
 
     template <typename Problem>
-    CK_TILE_DEVICE static constexpr auto GetSingleSmemElementSpaceSize()
+    CK_TILE_HOST_DEVICE static constexpr auto GetSingleSmemElementSpaceSize()
     {
         using namespace ck_tile;
 
@@ -543,7 +543,7 @@ struct BlockFmhaV3WmmaPipelinePolicy
     }
 
     template <typename Problem>
-    CK_TILE_DEVICE static constexpr ck_tile::index_t GetSmemSizeKV()
+    CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetSmemSizeKV()
     {
         using namespace ck_tile;
 
@@ -556,7 +556,7 @@ struct BlockFmhaV3WmmaPipelinePolicy
     }
 
     template <typename Problem>
-    CK_TILE_DEVICE static constexpr ck_tile::index_t GetSmemSize()
+    CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetSmemSize()
     {
         // 4 buffers: K double buffer (2) + V double buffer (2)
         return 4 * GetSmemSizeKV<Problem>();
