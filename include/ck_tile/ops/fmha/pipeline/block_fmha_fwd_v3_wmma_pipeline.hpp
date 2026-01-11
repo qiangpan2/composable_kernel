@@ -229,14 +229,14 @@ CK_TILE_DEVICE float mul_impl_vv_wmma(float lhs, float rhs)
 
 CK_TILE_DEVICE fp16x2_t cvt_pk_fp16_f32_wmma(float a, float b)
 {
-    // Use ROCm built-in, generates V_CVT_PK_RTZ_F16_F32 on RDNA3/4
-    return __builtin_amdgcn_cvt_pk_f16(a, b);
+    // Hardware accelerated packed fp32->fp16 conversion (RTZ)
+    return __builtin_amdgcn_cvt_pkrtz(a, b);
 }
 
 CK_TILE_DEVICE bf16x2_t cvt_pk_bf16_f32_wmma(float a, float b)
 {
-    // Use ROCm built-in for RDNA3/4 compatibility
-    return __builtin_amdgcn_cvt_pk_bf16(a, b);
+    // No bf16 packed builtin, use CK scalar conversion
+    return ck_tile::fp32x2_to_bf16x2(fp32x2_t{a, b});
 }
 
 CK_TILE_DEVICE fp32x2_t pk_mul_f32_wmma(fp32x2_t lhs, fp32x2_t rhs)
