@@ -229,28 +229,22 @@ CK_TILE_DEVICE float mul_impl_vv_wmma(float lhs, float rhs)
 
 CK_TILE_DEVICE fp16x2_t cvt_pk_fp16_f32_wmma(float a, float b)
 {
-    fp16x2_t result;
-    asm volatile("v_cvt_pk_f16_f32 %[result], %[a], %[b]"
-                 : [result] "=v"(result)
-                 : [a] "v"(a), [b] "v"(b));
-    return result;
+    // Use ROCm built-in, generates V_CVT_PK_RTZ_F16_F32 on RDNA3/4
+    return __builtin_amdgcn_cvt_pk_f16(a, b);
 }
 
 CK_TILE_DEVICE bf16x2_t cvt_pk_bf16_f32_wmma(float a, float b)
 {
-    bf16x2_t result;
-    asm volatile("v_cvt_pk_bf16_f32 %[result], %[a], %[b]"
-                 : [result] "=v"(result)
-                 : [a] "v"(a), [b] "v"(b));
-    return result;
+    // Use ROCm built-in for RDNA3/4 compatibility
+    return __builtin_amdgcn_cvt_pk_bf16(a, b);
 }
 
 CK_TILE_DEVICE fp32x2_t pk_mul_f32_wmma(fp32x2_t lhs, fp32x2_t rhs)
 {
+    // RDNA has no packed f32 multiply, use scalar operations
     fp32x2_t result;
-    asm volatile("v_pk_mul_f32 %[result], %[lhs], %[rhs]"
-                 : [result] "=v"(result)
-                 : [lhs] "v"(lhs), [rhs] "v"(rhs));
+    result.x = lhs.x * rhs.x;
+    result.y = lhs.y * rhs.y;
     return result;
 }
 } // namespace detail
