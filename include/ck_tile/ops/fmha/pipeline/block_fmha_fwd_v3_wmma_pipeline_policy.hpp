@@ -450,6 +450,7 @@ struct BlockFmhaV3WmmaPipelinePolicy
     {
         using namespace ck_tile;
 
+        // Use SAME layout as MakeVLdsStoreBlockDescriptor for consistency
         constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32
         constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32
         constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
@@ -463,26 +464,29 @@ struct BlockFmhaV3WmmaPipelinePolicy
         constexpr index_t LaneGroups = WarpSize / LanesPerK; // 2
         constexpr index_t NumIssues = kNPerBlock / (LaneGroups * NumWarps);  // 2
 
+        // SAME structure as Store: [NumIssues, LaneGroups, NumWarps, kKPerBlock/KPack, KPack]
+        // Must match Store descriptor's dimension order and strides
         constexpr auto v_lds_block_desc_0 = make_naive_tensor_descriptor(
-            make_tuple(number<NumIssues>{},
-                       number<NumWarps>{},
-                       number<LaneGroups>{},
-                       number<kKPerBlock / KPack>{},
-                       number<KPack>{}),
-            make_tuple(number<NumWarps * (WarpSize * KVector + kPad)>{},
-                       number<WarpSize * KVector + kPad>{},
-                       number<kKPerBlock>{},
-                       number<KPack>{},
-                       number<1>{}),
+            make_tuple(number<NumIssues>{},   // n0 - same as Store
+                       number<LaneGroups>{},  // n1 - same as Store
+                       number<NumWarps>{},    // n2 - same as Store
+                       number<kKPerBlock / KPack>{},  // k0
+                       number<KPack>{}),              // k1
+            make_tuple(number<NumWarps * (WarpSize * KVector + kPad)>{},  // stride for n0
+                       number<kKPerBlock>{},                               // stride for n1
+                       number<WarpSize * KVector + kPad>{},                // stride for n2
+                       number<KPack>{},                                    // stride for k0
+                       number<1>{}),                                       // stride for k1
             number<KPack>{},
             number<1>{});
 
+        // Transform matches Store: sequence<0, 1, 2>{} for N merge
         constexpr auto v_lds_block_desc = transform_tensor_descriptor(
             v_lds_block_desc_0,
             make_tuple(
                 make_merge_transform(make_tuple(number<NumIssues>{}, number<LaneGroups>{}, number<NumWarps>{})),
                 make_merge_transform(make_tuple(number<kKPerBlock / KPack>{}, number<KPack>{}))),
-            make_tuple(sequence<0, 2, 1>{}, sequence<3, 4>{}),
+            make_tuple(sequence<0, 1, 2>{}, sequence<3, 4>{}),
             make_tuple(sequence<0>{}, sequence<1>{}));
 
         return v_lds_block_desc;
