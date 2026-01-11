@@ -17,6 +17,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <iostream>
 
 struct FmhaFwdFp32
 {
@@ -798,6 +799,21 @@ auto fmha_fwd_v3_create_kargs_and_grids(fmha_fwd_args args)
     }();
 
     dim3 grids = FmhaKernel::GridSize(args.batch, args.nhead_q, args.max_seqlen_q, args.hdim_v);
+
+    // Debug: print kernel configuration before launch
+    std::cout << "\n[V3 Host Debug] FmhaKernel configuration:" << std::endl;
+    std::cout << "  GridSize: (" << grids.x << ", " << grids.y << ", " << grids.z << ")" << std::endl;
+    std::cout << "  BlockSize: " << FmhaKernel::BlockSize().x << std::endl;
+    std::cout << "  GetSmemSize: " << FmhaKernel::GetSmemSize() << " bytes" << std::endl;
+    std::cout << "  kM0=" << FmhaKernel::FmhaPipeline::kM0 
+              << ", kN0=" << FmhaKernel::FmhaPipeline::kN0
+              << ", kK0=" << FmhaKernel::FmhaPipeline::kK0
+              << ", kN1=" << FmhaKernel::FmhaPipeline::kN1
+              << ", kK1=" << FmhaKernel::FmhaPipeline::kK1 << std::endl;
+    std::cout << "  batch=" << args.batch << ", nhead_q=" << args.nhead_q 
+              << ", seqlen_q=" << args.seqlen_q << ", seqlen_k=" << args.seqlen_k
+              << ", hdim_q=" << args.hdim_q << ", hdim_v=" << args.hdim_v << std::endl;
+    std::cout << std::flush;
 
     return ck_tile::make_tuple(kargs, grids);
 }
