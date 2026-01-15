@@ -17,3 +17,12 @@ tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=128 -prec=fp16 -v=1 -repeat=10
 tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=256 -prec=fp16 -v=1 -repeat=10
 
 cmake --install build
+# Model Configuration:
+#   - Sequence Length: 75,600
+#   - Hidden Dimension: 5,120
+#   - Number of Heads: 40
+#   - Head Dimension: 128
+#   - Self-Attention Shape: [1, 75600, 40, 128]
+#
+# Full scale test: b=1, h=40, s=75600, d=128
+tile_example_fmha_fwd -b=1 -h=40 -s=75600 -d=128 -prec=fp16 -v=1 -repeat=2
