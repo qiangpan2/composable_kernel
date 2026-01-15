@@ -573,6 +573,15 @@ struct BlockFmhaFwdV3WmmaPipeline
         set_tile(m, bit_cast<float>(0xff7fffff)); // a bit larger than -infinity
         clear_tile(l);
 
+        // NaN Debug: Check Q and init
+        if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+            printf("[DBG] Q[0]=%f init:m=%f l=%f o=%f\n",
+                   type_convert<float>(q_tile.thread_buf_[0]),
+                   type_convert<float>(m.thread_buf_[0]),
+                   type_convert<float>(l.thread_buf_[0]),
+                   type_convert<float>(o_acc.thread_buf_[0]));
+        }
+
         const auto q_origin = q_dram_window.get_window_origin();
         const auto [seqlen_k_start, seqlen_k_end] =
             mask.GetTileRangeAlongX(q_origin.at(number<0>{}), number<kM0>{}, number<kN0>{});
@@ -768,6 +777,11 @@ struct BlockFmhaFwdV3WmmaPipeline
             block_tile_reduce_sync(m_latest, f_max, bool_constant<false>{});
             m = m_latest;
 
+            // NaN Debug: m value
+            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] m=%f\n", type_convert<float>(m.thread_buf_[0]));
+            }
+
             constexpr auto p_spans =
                 std::decay_t<decltype(sp(sp_reg_idx).sp_compute)>::get_distributed_spans();
             sweep_tile_span(p_spans[number<0>{}], [&](auto idx0) {
@@ -830,6 +844,11 @@ struct BlockFmhaFwdV3WmmaPipeline
                 l(i_idx) = detail::add_impl_vv_wmma(tmp * l[i_idx], rowsum_p[i_idx]);
             });
 
+            // NaN Debug: l value
+            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] l=%f\n", type_convert<float>(l.thread_buf_[0]));
+            }
+
             // update partial o_acc [0, fmha_alu_D_reg_cnt)
             static_for<0, fmha_alu_D_reg_cnt, 1>{}([&](auto idx) {
                 o_acc.thread_buf_[idx] = detail::mul_impl_vv_wmma(o_acc.thread_buf_[idx], o_acc_scale);
@@ -869,12 +888,22 @@ struct BlockFmhaFwdV3WmmaPipeline
                 // Note: Since k0_loops == 1 (v3 constraint), slice is full tile access
                 // Removed get_slice_tile to avoid tile distribution incompatibility with WMMA
                 gemm_0(sp(sp_reg_idx).sp_compute, q_tile, kv_tile.k_tile);
+
+                // NaN Debug: GEMM0
+                if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                    printf("[DBG] GEMM0 s[0]=%f\n", type_convert<float>(sp(sp_reg_idx).sp_compute.thread_buf_[0]));
+                }
             }
             else
             {
                 // Note: Since k1_loops == 1 (v3 constraint), slice is full tile access
                 // Removed get_slice_tile to avoid tile distribution incompatibility with WMMA
                 gemm_1(o_acc, sp(sp_reg_idx).p, kv_tile.v_tile);
+
+                // NaN Debug: GEMM1
+                if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                    printf("[DBG] GEMM1 o[0]=%f\n", type_convert<float>(o_acc.thread_buf_[0]));
+                }
             }
         };
 
@@ -1248,6 +1277,13 @@ struct BlockFmhaFwdV3WmmaPipeline
             });
 
             store_tile(lse_dram_window_tmp, tile_elementwise_in(lse_element_func, lse));
+        }
+
+        // NaN Debug: Epilogue
+        if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+            printf("[DBG] Epilogue l=%f o[0]=%f\n",
+                   type_convert<float>(l.thread_buf_[0]),
+                   type_convert<float>(o_acc.thread_buf_[0]));
         }
 
         // finally, O
