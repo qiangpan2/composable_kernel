@@ -931,12 +931,11 @@ struct BlockFmhaFwdV3WmmaPipeline
                 // Direct use of union causes threads to read wrong data -> NaN in GEMM1
                 // Solution: Store sp_compute to LDS with simple 2D layout, reload with GEMM1 A dist
                 
-                // Store sp_compute (with GEMM0 C distribution) to P LDS
-                // First convert from SaccDataType (fp32) to PDataType (fp16)
-                auto p_tile_converted = tile_elementwise_in(
-                    [](auto x) { return type_convert<PDataType>(x); },
-                    sp(sp_reg_idx).sp_compute);
-                store_tile(p_lds_window_store, p_tile_converted);
+                // Store sp.p (with GEMM0 C distribution) to P LDS
+                // NOTE: After softmax, union memory contains fp16 P values (written via sp.p)
+                // DO NOT read sp_compute (fp32 interpretation) - it would misinterpret fp16 as fp32!
+                // sp.p is already PDataType (fp16), no conversion needed
+                store_tile(p_lds_window_store, sp(sp_reg_idx).p);
                 
                 // Sync to ensure all threads have written to LDS
                 block_sync_lds();
@@ -975,11 +974,9 @@ struct BlockFmhaFwdV3WmmaPipeline
                 // CRITICAL FIX: Redistribute P from GEMM0 C distribution to GEMM1 A distribution
                 // Same fix as the gemm lambda above - see detailed comments there
                 
-                // Store sp_compute (with GEMM0 C distribution) to P LDS
-                auto p_tile_converted_cl = tile_elementwise_in(
-                    [](auto x) { return type_convert<PDataType>(x); },
-                    sp(sp_reg_idx).sp_compute);
-                store_tile(p_lds_window_store, p_tile_converted_cl);
+                // Store sp.p (already fp16, with GEMM0 C distribution) to P LDS
+                // DO NOT read sp_compute - it would misinterpret fp16 as fp32!
+                store_tile(p_lds_window_store, sp(sp_reg_idx).p);
                 block_sync_lds();
                 
                 // Load from P LDS with GEMM1 A distribution

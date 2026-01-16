@@ -13,7 +13,7 @@ cmake --build build -j 120 > build.log 2>&1
 ninja tile_example_fmha_fwd 2>&1 | tee failure.log
 
 tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=64 -prec=fp16 -v=1 -repeat=10
-tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=128 -prec=fp16 -v=1 -repeat=10
+tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=128 -prec=fp16 -v=1 -repeat=2 2>&1 | tee failure.log
 tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=256 -prec=fp16 -v=1 -repeat=10
 
 cmake --install build
