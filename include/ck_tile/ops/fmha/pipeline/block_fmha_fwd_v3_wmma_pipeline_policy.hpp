@@ -94,87 +94,20 @@ struct BlockFmhaV3WmmaPipelinePolicy
     CK_TILE_DEVICE static constexpr auto MakeKDramTileDistribution()
     {
         using namespace ck_tile;
-
-        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32
-        constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kK0;  // 128
-        constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
-        constexpr index_t WarpSize   = 32;  // wave32 fixed
-
-        constexpr index_t KVector = GetAlignmentK<Problem>();  // 2 for fp16
-
-        // wave32: use multiple K issues instead of requiring WarpSize*KVector >= kKPerBlock
-        // Each warp loads WarpSize * KVector = 32 * 2 = 64 elements per issue
-        // Need KIssues = kKPerBlock / (WarpSize * KVector) = 128 / 64 = 2 issues along K
-        constexpr index_t ElementsPerWarpK = WarpSize * KVector;  // 64
-        constexpr index_t KIssues = kKPerBlock / ElementsPerWarpK;  // 2
-        constexpr index_t NPerWarp = kNPerBlock / NumWarps;  // 4
-
-        static_assert(kKPerBlock % ElementsPerWarpK == 0, "kKPerBlock must be divisible by warp K elements");
-        static_assert(kNPerBlock % NumWarps == 0, "kNPerBlock must be divisible by NumWarps");
-
-        // Distribution: [N0=NPerWarp, N1=NumWarps, K0=KIssues, K1=WarpSize, K2=KVector]
-        // N dimension: each warp handles NPerWarp rows
-        // K dimension: split into KIssues, each covering WarpSize*KVector elements
-
-        constexpr index_t N0 = NPerWarp;   // 4
-        constexpr index_t N1 = NumWarps;   // 8
-        constexpr index_t K0 = KIssues;    // 2
-        constexpr index_t K1 = WarpSize;   // 32
-        constexpr index_t K2 = KVector;    // 2
-
-        return make_static_tile_distribution(
-            tile_distribution_encoding<sequence<1>,
-                                       tuple<sequence<N0, N1>, sequence<K0, K1, K2>>,
-                                       tuple<sequence<1>, sequence<1, 2>>,
-                                       tuple<sequence<1>, sequence<1, 0>>,
-                                       sequence<1, 2>,
-                                       sequence<0, 2>>{});
+        using BlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<Problem>())>;
+        // Use BlockGemm B distribution to ensure consistency with LDS load
+        // K is the B matrix in GEMM0 (Q x K^T = S)
+        return make_static_tile_distribution(BlockGemm::MakeBBlockDistributionEncode());
     }
 
     template <typename Problem>
     CK_TILE_DEVICE static constexpr auto MakeVDramTileDistribution()
     {
         using namespace ck_tile;
-
-        // V tile layout: [kK1, kN1] in memory (K is seqlen, N is hdim)
-        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32 (seqlen)
-        constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32 (hdim)
-        constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
-        constexpr index_t WarpSize   = 32;  // wave32 fixed
-
-        constexpr index_t KVector = GetAlignmentV<Problem>();  // 2 for fp16
-
-        // For V: kKPerBlock = 32, WarpSize * KVector = 64 >= 32, so single issue works
-        constexpr index_t ElementsPerWarpK = WarpSize * KVector;  // 64
-        
-        // Check if we need multiple K issues
-        constexpr bool NeedMultipleKIssues = kKPerBlock > ElementsPerWarpK;
-        
-        if constexpr (NeedMultipleKIssues) {
-            constexpr index_t KIssues = kKPerBlock / ElementsPerWarpK;
-            constexpr index_t NPerWarp = kNPerBlock / NumWarps;
-
-            return make_static_tile_distribution(
-                tile_distribution_encoding<sequence<1>,
-                                           tuple<sequence<NPerWarp, NumWarps>, sequence<KIssues, WarpSize, KVector>>,
-                                           tuple<sequence<1>, sequence<1, 2>>,
-                                           tuple<sequence<1>, sequence<1, 0>>,
-                                           sequence<1, 2>,
-                                           sequence<0, 2>>{});
-        } else {
-            // Single K issue: simpler distribution
-            constexpr index_t LanesPerK = kKPerBlock / KVector;  // 16
-            constexpr index_t LaneGroups = WarpSize / LanesPerK; // 2
-            constexpr index_t NumIssues = kNPerBlock / (LaneGroups * NumWarps);  // 2
-
-            return make_static_tile_distribution(
-                tile_distribution_encoding<sequence<1>,
-                                           tuple<sequence<NumIssues, LaneGroups, NumWarps>, sequence<LanesPerK, KVector>>,
-                                           tuple<sequence<1>, sequence<1, 2>>,
-                                           tuple<sequence<2>, sequence<1, 0>>,
-                                           sequence<1, 2>,
-                                           sequence<0, 1>>{});
-        }
+        using BlockGemm = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
+        // Use BlockGemm B distribution to ensure consistency with LDS load
+        // V is the B matrix in GEMM1 (P x V = O)
+        return make_static_tile_distribution(BlockGemm::MakeBBlockDistributionEncode());
     }
 
     // ========================================================================
