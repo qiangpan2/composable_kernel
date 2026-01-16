@@ -13,25 +13,6 @@
 
 namespace ck_tile {
 
-// Forward declaration for distribution encoder
-struct BlockFmhaV3WmmaPipelinePolicy;
-
-// Distribution encoder that returns GEMM0 C distribution for use as GEMM1 A input.
-// This enables the union trick between sp_compute (GEMM0 C) and sp.p (GEMM1 A)
-// to work correctly by making both have the same distribution.
-template <typename FmhaProblem>
-struct GEMM0CAsGEMM1ADistributionEncoder
-{
-    template <typename GemmProblem>
-    CK_TILE_DEVICE static constexpr auto Get()
-    {
-        // Get GEMM0 (Q x K^T) BlockGemm and return its C distribution encoding
-        using QKBlockGemm = remove_cvref_t<
-            decltype(BlockFmhaV3WmmaPipelinePolicy::template GetQKBlockGemm<FmhaProblem>())>;
-        return QKBlockGemm::MakeCBlockDistributionEncode();
-    }
-};
-
 /// @brief WMMA-specific policy for v3 pipeline on gfx11/gfx12 (wave32)
 ///
 /// Key differences from BlockFmhaV3PipelineDefaultPolicy:
@@ -215,6 +196,20 @@ struct BlockFmhaV3WmmaPipelinePolicy
 
         return BlockGemmARegBRegCRegV2<GemmProblem, BlockGemmPolicy>{};
     }
+
+    // Nested distribution encoder - returns GEMM0 C distribution for use as GEMM1 A input.
+    // This enables the union trick between sp_compute (GEMM0 C) and sp.p (GEMM1 A)
+    // to work correctly by making both have the same distribution.
+    template <typename FmhaProblem>
+    struct GEMM0CAsGEMM1ADistributionEncoder
+    {
+        template <typename GemmProblem>
+        CK_TILE_DEVICE static constexpr auto Get()
+        {
+            using QKBlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<FmhaProblem>())>;
+            return QKBlockGemm::MakeCBlockDistributionEncode();
+        }
+    };
 
     template <typename Problem>
     CK_TILE_DEVICE static constexpr auto GetPVBlockGemm()
