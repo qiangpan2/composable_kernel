@@ -134,8 +134,24 @@ struct BlockFmhaV3WmmaPipelinePolicy
     CK_TILE_DEVICE static constexpr auto MakePRegTileDistribution()
     {
         using namespace ck_tile;
+        // NOTE: This returns GEMM1 A distribution for use in GEMM1.
+        // However, sp_compute (GEMM0 C output) has GEMM0 C distribution which is DIFFERENT.
+        // The union between sp_compute and p DOES NOT WORK correctly because the
+        // thread-to-coordinate mappings are different:
+        // - GEMM0 C: R=<MWarp=4>, H=[<MIterPerWarp>, <NIterPerWarp, NWarp=2>]
+        // - GEMM1 A: R=<NWarp=2>, H=[<MIterPerWarp>, <KIterPerWarp>]
+        // The pipeline must redistribute P through LDS before passing to GEMM1.
         using BlockGemm = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
         return make_static_tile_distribution(BlockGemm::MakeABlockDistributionEncode());
+    }
+
+    // Get GEMM0 C distribution (used by sp_compute in the union)
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakeSPComputeDistribution()
+    {
+        using namespace ck_tile;
+        using BlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<Problem>())>;
+        return make_static_tile_distribution(BlockGemm::MakeCBlockDistributionEncode());
     }
 
     template <typename Problem>
@@ -385,6 +401,79 @@ struct BlockFmhaV3WmmaPipelinePolicy
     }
 
     // ========================================================================
+    // P LDS descriptors for redistribution (GEMM0 C -> GEMM1 A)
+    // ========================================================================
+
+    static constexpr ck_tile::index_t kPLdsPadInBytes = 16;  // 16 bytes padding
+
+    // P LDS size for redistribution: [kM0, kN0] with padding
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr auto GetPLdsSize()
+    {
+        using namespace ck_tile;
+        using PDataType = remove_cvref_t<typename Problem::PDataType>;
+        constexpr index_t kMPerBlock = Problem::BlockFmhaShape::kM0;  // 64
+        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32
+        constexpr index_t kPad = kPLdsPadInBytes / sizeof(PDataType); // 8
+
+        // Simple 2D layout: M rows × (N + pad) columns
+        return kMPerBlock * (kNPerBlock + kPad) * sizeof(PDataType);  // 64 * 40 * 2 = 5120 bytes
+    }
+
+    // P LDS Store descriptor: simple 2D [M, N+pad] layout for storing sp_compute
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakePLdsStoreBlockDescriptor()
+    {
+        using namespace ck_tile;
+        using PDataType = remove_cvref_t<typename Problem::PDataType>;
+
+        constexpr index_t kMPerBlock = Problem::BlockFmhaShape::kM0;  // 64
+        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32
+        constexpr index_t kPad = kPLdsPadInBytes / sizeof(PDataType); // 8
+
+        // Simple 2D naive layout: [M, N+pad]
+        constexpr auto p_lds_block_desc = make_naive_tensor_descriptor(
+            make_tuple(number<kMPerBlock>{}, number<kNPerBlock>{}),
+            make_tuple(number<kNPerBlock + kPad>{}, number<1>{}),
+            number<1>{},  // alignment
+            number<1>{});
+
+        return p_lds_block_desc;
+    }
+
+    // P LDS Load descriptor: simple 2D layout with vectorized N access for loading as GEMM1 A
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakePLdsLoadBlockDescriptor()
+    {
+        using namespace ck_tile;
+        using PDataType = remove_cvref_t<typename Problem::PDataType>;
+
+        constexpr index_t kMPerBlock = Problem::BlockFmhaShape::kM0;  // 64
+        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32 (this is kK1 for GEMM1)
+        constexpr index_t kPad = kPLdsPadInBytes / sizeof(PDataType); // 8
+
+        constexpr index_t NPack = 16 / sizeof(PDataType);  // 8 for fp16
+
+        // 3D layout for vectorized access: [M, N/NPack, NPack]
+        constexpr auto p_lds_block_desc_0 = make_naive_tensor_descriptor(
+            make_tuple(number<kMPerBlock>{}, number<kNPerBlock / NPack>{}, number<NPack>{}),
+            make_tuple(number<kNPerBlock + kPad>{}, number<NPack>{}, number<1>{}),
+            number<NPack>{},
+            number<1>{});
+
+        // Merge back to 2D: [M, N]
+        constexpr auto p_lds_block_desc = transform_tensor_descriptor(
+            p_lds_block_desc_0,
+            make_tuple(
+                make_pass_through_transform(number<kMPerBlock>{}),
+                make_merge_transform(make_tuple(number<kNPerBlock / NPack>{}, number<NPack>{}))),
+            make_tuple(sequence<0>{}, sequence<1, 2>{}),
+            make_tuple(sequence<0>{}, sequence<1>{}));
+
+        return p_lds_block_desc;
+    }
+
+    // ========================================================================
     // SMEM size calculation - rewritten for wave32 layout
     // ========================================================================
 
@@ -442,8 +531,9 @@ struct BlockFmhaV3WmmaPipelinePolicy
     template <typename Problem>
     CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetSmemSize()
     {
-        // 4 buffers: K double buffer (2) + V double buffer (2)
-        return 4 * GetSmemSizeKV<Problem>();
+        // 4 buffers: K double buffer (2) + V double buffer (2) + P redistribution buffer (1)
+        // P LDS is used to redistribute P from GEMM0 C distribution to GEMM1 A distribution
+        return 4 * GetSmemSizeKV<Problem>() + GetPLdsSize<Problem>();
     }
 };
 
