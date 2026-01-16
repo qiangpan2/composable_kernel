@@ -730,6 +730,10 @@ struct BlockFmhaFwdV3WmmaPipeline
 
         auto K_lds_load = [&](auto k_lds_read_idx) {
             kv_tile.k_tile = load_tile(k_lds_window_load(k_lds_read_idx));
+            // Debug: K tile
+            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] K[0]=%f\n", type_convert<float>(kv_tile.k_tile.thread_buf_[0]));
+            }
         };
 
         // WMMA: Use synchronous load + store instead of async_load_tile_raw
