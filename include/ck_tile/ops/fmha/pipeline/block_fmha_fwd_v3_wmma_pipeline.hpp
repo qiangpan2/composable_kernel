@@ -562,20 +562,10 @@ struct BlockFmhaFwdV3WmmaPipeline
                                  Policy::template MakeVRegTileDistribution<Problem>());
         });
 
-        // P LDS window for redistribution from GEMM0 C distribution to GEMM1 A distribution
-        // P LDS is located after K (2 buffers) and V (2 buffers) in SMEM
-        auto p_lds_window_store = make_lds_tile_window<PDataType>(
-            static_cast<char*>(smem_ptr) + 4 * Policy::template GetSmemSizeKV<Problem>(),
-            Policy::template MakePLdsStoreBlockDescriptor<Problem>());
-
-        auto p_lds_window_load = make_tile_window(
-            make_lds_tile_window<PDataType>(
-                static_cast<char*>(smem_ptr) + 4 * Policy::template GetSmemSizeKV<Problem>(),
-                Policy::template MakePLdsLoadBlockDescriptor<Problem>()),
-            Policy::template MakePRegTileDistribution<Problem>());
-
-        // P tile with GEMM1 A distribution for use in GEMM1
-        auto p_tile_for_gemm1 = decltype(load_tile(p_lds_window_load)){};
+        // NOTE: With custom BlockGemmARegBRegCRegV2FmhaWmma, GEMM1 now accepts GEMM0 C distribution
+        // as its A input. sp.p has GEMM0 C distribution (same as sp_compute), so we can pass
+        // it directly to GEMM1 without LDS redistribution. This eliminates extra SMEM usage
+        // and improves performance.
 
         {
             auto origin_q      = load_tile(q_dram_window);
@@ -924,49 +914,19 @@ struct BlockFmhaFwdV3WmmaPipeline
             else
             {
                 // Note: Since k1_loops == 1 (v3 constraint), slice is full tile access
-                // CRITICAL FIX: Redistribute P from GEMM0 C distribution to GEMM1 A distribution
-                // The union between sp_compute and p has different distribution encodings:
-                // - sp_compute (GEMM0 C): R=<MWarp=4>, H=[<MIterPerWarp>, <NIterPerWarp, NWarp=2>]
-                // - p (GEMM1 A): R=<NWarp=2>, H=[<MIterPerWarp>, <KIterPerWarp>]
-                // Direct use of union causes threads to read wrong data -> NaN in GEMM1
-                // Solution: Store sp_compute to LDS with simple 2D layout, reload with GEMM1 A dist
-                
-                // CRITICAL FIX: Use GEMM0 C distribution for store
-                // sp.p is DECLARED with GEMM1 A distribution but CONTAINS data in GEMM0 C layout
-                // (due to union with sp_compute). We must create a tile with correct GEMM0 C
-                // distribution to ensure data is written to correct LDS positions.
-                
-                // Create tile with GEMM0 C distribution (matching actual data layout)
-                auto p_tile_gemm0_c = make_static_distributed_tensor<PDataType>(
-                    Policy::template MakeSPComputeDistribution<Problem>());
-                
-                // Verify thread_buf_ sizes match at compile time
-                static_assert(
-                    decltype(p_tile_gemm0_c.thread_buf_)::size() == 
-                    decltype(sp(sp_reg_idx).p.thread_buf_)::size(),
-                    "P tile thread_buf_ size mismatch between GEMM0 C and GEMM1 A distributions");
-                
-                // Copy thread_buf_ (compiler optimizes to no-op)
-                p_tile_gemm0_c.thread_buf_ = sp(sp_reg_idx).p.thread_buf_;
-                
-                // Store with correct GEMM0 C distribution
-                store_tile(p_lds_window_store, p_tile_gemm0_c);
-                
-                // Sync to ensure all threads have written to LDS
-                block_sync_lds();
-                
-                // Load from P LDS with GEMM1 A distribution
-                p_tile_for_gemm1 = load_tile(p_lds_window_load);
+                // With BlockGemmARegBRegCRegV2FmhaWmma, GEMM1 accepts GEMM0 C distribution as A input.
+                // sp.p now has GEMM0 C distribution (same as sp_compute), so we can pass it
+                // directly to GEMM1 without LDS redistribution.
                 
                 // Debug: P and V before GEMM1
                 if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
                     printf("[DBG] P[0]=%f V[0]=%f\n", 
-                           type_convert<float>(p_tile_for_gemm1.thread_buf_[0]),
+                           type_convert<float>(sp(sp_reg_idx).p.thread_buf_[0]),
                            type_convert<float>(kv_tile.v_tile.thread_buf_[0]));
                 }
                 
-                // Use redistributed P tile in GEMM1
-                gemm_1(o_acc, p_tile_for_gemm1, kv_tile.v_tile);
+                // Pass sp.p directly to GEMM1 (no redistribution needed!)
+                gemm_1(o_acc, sp(sp_reg_idx).p, kv_tile.v_tile);
 
                 // NaN Debug: GEMM1
                 if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
@@ -986,31 +946,8 @@ struct BlockFmhaFwdV3WmmaPipeline
             else
             {
                 // Note: Since k1_loops == 1 (v3 constraint), slice is full tile access
-                // CRITICAL FIX (Phase 29): Use GEMM0 C distribution for store
-                // Same fix as the gemm lambda above - see detailed comments there
-                
-                // Create tile with GEMM0 C distribution (matching actual data layout)
-                auto p_tile_gemm0_c_cl = make_static_distributed_tensor<PDataType>(
-                    Policy::template MakeSPComputeDistribution<Problem>());
-                
-                // Verify thread_buf_ sizes match at compile time
-                static_assert(
-                    decltype(p_tile_gemm0_c_cl.thread_buf_)::size() == 
-                    decltype(sp(sp_reg_idx).p.thread_buf_)::size(),
-                    "P tile thread_buf_ size mismatch between GEMM0 C and GEMM1 A distributions");
-                
-                // Copy thread_buf_ (compiler optimizes to no-op)
-                p_tile_gemm0_c_cl.thread_buf_ = sp(sp_reg_idx).p.thread_buf_;
-                
-                // Store with correct GEMM0 C distribution
-                store_tile(p_lds_window_store, p_tile_gemm0_c_cl);
-                block_sync_lds();
-                
-                // Load from P LDS with GEMM1 A distribution
-                p_tile_for_gemm1 = load_tile(p_lds_window_load);
-                
-                // Use redistributed P tile in GEMM1
-                gemm_1(o_acc, p_tile_for_gemm1, kv_tile.v_tile);
+                // Pass sp.p directly to GEMM1 (no redistribution needed!)
+                gemm_1(o_acc, sp(sp_reg_idx).p, kv_tile.v_tile);
                 fmha_alu0(number<1>{} - sp_reg_idx);
             }
         };

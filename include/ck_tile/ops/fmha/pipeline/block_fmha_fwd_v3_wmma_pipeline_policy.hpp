@@ -5,12 +5,32 @@
 
 #include "ck_tile/core.hpp"
 #include "ck_tile/ops/gemm/block/block_gemm_areg_breg_creg_v2.hpp"
+#include "ck_tile/ops/gemm/block/block_gemm_areg_breg_creg_v2_fmha_wmma.hpp"
 #include "ck_tile/ops/gemm/block/block_gemm_areg_breg_creg_v2_custom_policy.hpp"
 #include "ck_tile/ops/gemm/block/block_gemm_problem.hpp"
 #include "ck_tile/ops/gemm/pipeline/tile_gemm_shape.hpp"
 #include "ck_tile/ops/gemm/warp/warp_gemm_dispatcher.hpp"
 
 namespace ck_tile {
+
+// Forward declaration for distribution encoder
+struct BlockFmhaV3WmmaPipelinePolicy;
+
+// Distribution encoder that returns GEMM0 C distribution for use as GEMM1 A input.
+// This enables the union trick between sp_compute (GEMM0 C) and sp.p (GEMM1 A)
+// to work correctly by making both have the same distribution.
+template <typename FmhaProblem>
+struct GEMM0CAsGEMM1ADistributionEncoder
+{
+    template <typename GemmProblem>
+    CK_TILE_DEVICE static constexpr auto Get()
+    {
+        // Get GEMM0 (Q x K^T) BlockGemm and return its C distribution encoding
+        using QKBlockGemm = remove_cvref_t<
+            decltype(BlockFmhaV3WmmaPipelinePolicy::template GetQKBlockGemm<FmhaProblem>())>;
+        return QKBlockGemm::MakeCBlockDistributionEncode();
+    }
+};
 
 /// @brief WMMA-specific policy for v3 pipeline on gfx11/gfx12 (wave32)
 ///
@@ -134,22 +154,15 @@ struct BlockFmhaV3WmmaPipelinePolicy
     CK_TILE_DEVICE static constexpr auto MakePRegTileDistribution()
     {
         using namespace ck_tile;
-        // NOTE: This returns GEMM1 A distribution for use in GEMM1.
-        // However, sp_compute (GEMM0 C output) has GEMM0 C distribution which is DIFFERENT.
-        // The union between sp_compute and p DOES NOT WORK correctly because the
-        // thread-to-coordinate mappings are different:
-        // - GEMM0 C: R=<MWarp=4>, H=[<MIterPerWarp>, <NIterPerWarp, NWarp=2>]
-        // - GEMM1 A: R=<NWarp=2>, H=[<MIterPerWarp>, <KIterPerWarp>]
-        // The pipeline must redistribute P through LDS before passing to GEMM1.
-        using BlockGemm = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
-        return make_static_tile_distribution(BlockGemm::MakeABlockDistributionEncode());
-    }
-
-    // Get GEMM0 C distribution (used by sp_compute in the union)
-    template <typename Problem>
-    CK_TILE_DEVICE static constexpr auto MakeSPComputeDistribution()
-    {
-        using namespace ck_tile;
+        // Return GEMM0 C distribution (same as sp_compute).
+        // This makes the union between sp_compute and sp.p work correctly:
+        // - sp_compute: GEMM0 C output (fp32), has GEMM0 C distribution
+        // - sp.p: softmax output (fp16), now also has GEMM0 C distribution
+        // Both have the same per-thread element count (8 elements), so the union works.
+        //
+        // GEMM1 (BlockGemmARegBRegCRegV2FmhaWmma) is configured to accept GEMM0 C distribution
+        // as its A input via GEMM0CAsGEMM1ADistributionEncoder, so sp.p can be passed
+        // directly to GEMM1 without LDS redistribution.
         using BlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<Problem>())>;
         return make_static_tile_distribution(BlockGemm::MakeCBlockDistributionEncode());
     }
@@ -238,7 +251,12 @@ struct BlockFmhaV3WmmaPipelinePolicy
                                                 typename Problem::BlockFmhaShape::Gemm1BlockWarps,
                                                 WarpGemm,
                                                 GemmLoopOrder::MNK>;
-        return BlockGemmARegBRegCRegV2<GemmProblem, BlockGemmPolicy>{};
+
+        // Use custom GEMM that accepts GEMM0 C distribution as A input.
+        // This allows sp.p (with GEMM0 C distribution) to be passed directly to GEMM1
+        // without LDS redistribution, making the union trick work correctly.
+        using CustomADist = GEMM0CAsGEMM1ADistributionEncoder<Problem>;
+        return BlockGemmARegBRegCRegV2FmhaWmma<GemmProblem, BlockGemmPolicy, CustomADist>{};
     }
 
     // ========================================================================
@@ -401,77 +419,11 @@ struct BlockFmhaV3WmmaPipelinePolicy
     }
 
     // ========================================================================
-    // P LDS descriptors for redistribution (GEMM0 C -> GEMM1 A)
+    // NOTE: P LDS redistribution is no longer needed!
+    // With BlockGemmARegBRegCRegV2FmhaWmma, GEMM1 accepts GEMM0 C distribution as A input.
+    // sp.p now has GEMM0 C distribution (same as sp_compute), so it can be passed
+    // directly to GEMM1 without LDS redistribution.
     // ========================================================================
-
-    static constexpr ck_tile::index_t kPLdsPadInBytes = 16;  // 16 bytes padding
-
-    // P LDS size for redistribution: [kM0, kN0] with padding
-    template <typename Problem>
-    CK_TILE_HOST_DEVICE static constexpr auto GetPLdsSize()
-    {
-        using namespace ck_tile;
-        using PDataType = remove_cvref_t<typename Problem::PDataType>;
-        constexpr index_t kMPerBlock = Problem::BlockFmhaShape::kM0;  // 64
-        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32
-        constexpr index_t kPad = kPLdsPadInBytes / sizeof(PDataType); // 8
-
-        // Simple 2D layout: M rows × (N + pad) columns
-        return kMPerBlock * (kNPerBlock + kPad) * sizeof(PDataType);  // 64 * 40 * 2 = 5120 bytes
-    }
-
-    // P LDS Store descriptor: simple 2D [M, N+pad] layout for storing sp_compute
-    template <typename Problem>
-    CK_TILE_DEVICE static constexpr auto MakePLdsStoreBlockDescriptor()
-    {
-        using namespace ck_tile;
-        using PDataType = remove_cvref_t<typename Problem::PDataType>;
-
-        constexpr index_t kMPerBlock = Problem::BlockFmhaShape::kM0;  // 64
-        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32
-        constexpr index_t kPad = kPLdsPadInBytes / sizeof(PDataType); // 8
-
-        // Simple 2D naive layout: [M, N+pad]
-        constexpr auto p_lds_block_desc = make_naive_tensor_descriptor(
-            make_tuple(number<kMPerBlock>{}, number<kNPerBlock>{}),
-            make_tuple(number<kNPerBlock + kPad>{}, number<1>{}),
-            number<1>{},  // alignment
-            number<1>{});
-
-        return p_lds_block_desc;
-    }
-
-    // P LDS Load descriptor: simple 2D layout with vectorized N access for loading as GEMM1 A
-    template <typename Problem>
-    CK_TILE_DEVICE static constexpr auto MakePLdsLoadBlockDescriptor()
-    {
-        using namespace ck_tile;
-        using PDataType = remove_cvref_t<typename Problem::PDataType>;
-
-        constexpr index_t kMPerBlock = Problem::BlockFmhaShape::kM0;  // 64
-        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32 (this is kK1 for GEMM1)
-        constexpr index_t kPad = kPLdsPadInBytes / sizeof(PDataType); // 8
-
-        constexpr index_t NPack = 16 / sizeof(PDataType);  // 8 for fp16
-
-        // 3D layout for vectorized access: [M, N/NPack, NPack]
-        constexpr auto p_lds_block_desc_0 = make_naive_tensor_descriptor(
-            make_tuple(number<kMPerBlock>{}, number<kNPerBlock / NPack>{}, number<NPack>{}),
-            make_tuple(number<kNPerBlock + kPad>{}, number<NPack>{}, number<1>{}),
-            number<NPack>{},
-            number<1>{});
-
-        // Merge back to 2D: [M, N]
-        constexpr auto p_lds_block_desc = transform_tensor_descriptor(
-            p_lds_block_desc_0,
-            make_tuple(
-                make_pass_through_transform(number<kMPerBlock>{}),
-                make_merge_transform(make_tuple(number<kNPerBlock / NPack>{}, number<NPack>{}))),
-            make_tuple(sequence<0>{}, sequence<1, 2>{}),
-            make_tuple(sequence<0>{}, sequence<1>{}));
-
-        return p_lds_block_desc;
-    }
 
     // ========================================================================
     // SMEM size calculation - rewritten for wave32 layout
@@ -531,9 +483,9 @@ struct BlockFmhaV3WmmaPipelinePolicy
     template <typename Problem>
     CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetSmemSize()
     {
-        // 4 buffers: K double buffer (2) + V double buffer (2) + P redistribution buffer (1)
-        // P LDS is used to redistribute P from GEMM0 C distribution to GEMM1 A distribution
-        return 4 * GetSmemSizeKV<Problem>() + GetPLdsSize<Problem>();
+        // 4 buffers: K double buffer (2) + V double buffer (2)
+        // NOTE: P LDS redistribution is no longer needed - GEMM1 accepts GEMM0 C distribution
+        return 4 * GetSmemSizeKV<Problem>();
     }
 };
 
