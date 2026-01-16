@@ -739,6 +739,10 @@ struct BlockFmhaFwdV3WmmaPipeline
         // WMMA: Use synchronous load + store instead of async_load_tile_raw
         auto V_mem_load = [&](auto v_lds_write_idx) {
             auto v_tile_tmp = load_tile(v_dram_window);
+            // Debug: V after DRAM load
+            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] V_DRAM[0]=%f\n", type_convert<float>(v_tile_tmp.thread_buf_[0]));
+            }
             store_tile(v_lds_window_store(v_lds_write_idx), v_tile_tmp);
 
             /// FIXME: use the future-predicting method to move the window
@@ -748,6 +752,10 @@ struct BlockFmhaFwdV3WmmaPipeline
         // WMMA: Use regular load (no transpose needed due to symmetric A/B distribution)
         auto V_lds_load = [&](auto v_lds_read_idx) {
             kv_tile.v_tile = load_tile(v_lds_window_load(v_lds_read_idx));
+            // Debug: V after LDS load
+            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] V_LDS[0]=%f\n", type_convert<float>(kv_tile.v_tile.thread_buf_[0]));
+            }
         };
 
         decltype(m) m_old;
@@ -902,6 +910,12 @@ struct BlockFmhaFwdV3WmmaPipeline
             {
                 // Note: Since k1_loops == 1 (v3 constraint), slice is full tile access
                 // Removed get_slice_tile to avoid tile distribution incompatibility with WMMA
+                // Debug: P and V before GEMM1
+                if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                    printf("[DBG] P[0]=%f V[0]=%f\n", 
+                           type_convert<float>(sp(sp_reg_idx).p.thread_buf_[0]),
+                           type_convert<float>(kv_tile.v_tile.thread_buf_[0]));
+                }
                 gemm_1(o_acc, sp(sp_reg_idx).p, kv_tile.v_tile);
 
                 // NaN Debug: GEMM1
