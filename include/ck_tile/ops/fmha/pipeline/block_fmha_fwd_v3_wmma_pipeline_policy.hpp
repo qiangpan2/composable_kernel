@@ -335,91 +335,50 @@ struct BlockFmhaV3WmmaPipelinePolicy
     MakeVLdsStoreBlockDescriptor(ck_tile::number<IBuf> = ck_tile::number<0>{})
     {
         using namespace ck_tile;
+        using VDataType = remove_cvref_t<typename Problem::VDataType>;
 
-        // V layout: [kK1, kN1] in memory
-        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32 (seqlen)
-        constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32 (hdim)
-        constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
-        constexpr index_t WarpSize   = 32;
+        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32
+        constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32
+        constexpr index_t kPad = kVLdsPadInBytes / sizeof(VDataType); // 32
 
-        constexpr index_t KVector = GetAlignmentV<Problem>();  // 2
-        constexpr index_t kPad = kVLdsPadInBytes / sizeof(typename Problem::VDataType);  // 32
-
-        // For V: kKPerBlock = 32 <= WarpSize * KVector = 64, single K issue
-        constexpr index_t LanesPerK = kKPerBlock / KVector;  // 16
-        constexpr index_t LaneGroups = WarpSize / LanesPerK; // 2
-        constexpr index_t NumIssues = kNPerBlock / (LaneGroups * NumWarps);  // 2
-
-        constexpr auto v_lds_block_desc_0 = make_naive_tensor_descriptor_with_offset(
-            make_tuple(number<NumIssues>{},   // n0
-                       number<LaneGroups>{},  // n1
-                       number<NumWarps>{},    // n2
-                       number<LanesPerK>{},   // k0
-                       number<KVector>{}),    // k1
-            make_tuple(number<NumWarps * (WarpSize * KVector + kPad)>{},
-                       number<kKPerBlock>{},
-                       number<WarpSize * KVector + kPad>{},
-                       number<KVector>{},
-                       number<1>{}),
+        // Simple 2D naive layout: [N, K+pad] - works with any distribution
+        // This layout is compatible with BlockGemm B distribution used for V DRAM load
+        constexpr auto v_lds_block_desc = make_naive_tensor_descriptor_with_offset(
+            make_tuple(number<kNPerBlock>{}, number<kKPerBlock>{}),
+            make_tuple(number<kKPerBlock + kPad>{}, number<1>{}),
             number<(IBuf + 2) * GetSingleSmemElementSpaceSize<Problem>()>{},
-            number<KVector>{},
+            number<GetAlignmentV<Problem>()>{},
             number<1>{});
 
-        // Transform to 2D [kNPerBlock, kKPerBlock] format to match DRAM tile distribution
-        // Note: Must output 2D to be compatible with store_tile from 2D DRAM tile
-        constexpr auto v_lds_block_desc_2d = transform_tensor_descriptor(
-            v_lds_block_desc_0,
-            make_tuple(
-                make_merge_transform(make_tuple(number<NumIssues>{}, number<LaneGroups>{}, number<NumWarps>{})),
-                make_merge_transform(make_tuple(number<LanesPerK>{}, number<KVector>{}))),
-            make_tuple(sequence<0, 1, 2>{}, sequence<3, 4>{}),
-            make_tuple(sequence<0>{}, sequence<1>{}));
-
-        return v_lds_block_desc_2d;
+        return v_lds_block_desc;
     }
 
     template <typename Problem>
     CK_TILE_DEVICE static constexpr auto MakeVLdsLoadBlockDescriptor()
     {
         using namespace ck_tile;
+        using VDataType = remove_cvref_t<typename Problem::VDataType>;
 
-        // Use SAME layout as MakeVLdsStoreBlockDescriptor for consistency
         constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32
         constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32
-        constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
-        constexpr index_t WarpSize   = 32;
+        constexpr index_t kPad = kVLdsPadInBytes / sizeof(VDataType); // 32
+        constexpr index_t KPack = GetSmemVPackK<Problem>();           // 8
 
-        constexpr index_t KPack   = GetSmemVPackK<Problem>();  // 8
-        constexpr index_t KVector = GetAlignmentV<Problem>();  // 2
-        constexpr index_t kPad = kVLdsPadInBytes / sizeof(typename Problem::VDataType);  // 32
-
-        constexpr index_t LanesPerK = kKPerBlock / KVector;  // 16
-        constexpr index_t LaneGroups = WarpSize / LanesPerK; // 2
-        constexpr index_t NumIssues = kNPerBlock / (LaneGroups * NumWarps);  // 2
-
-        // SAME structure as Store: [NumIssues, LaneGroups, NumWarps, kKPerBlock/KPack, KPack]
-        // Must match Store descriptor's dimension order and strides
+        // Simple 2D naive layout matching Store, with vectorized K access
+        // Layout: [N, K/KPack, KPack] with stride [K+pad, KPack, 1]
         constexpr auto v_lds_block_desc_0 = make_naive_tensor_descriptor(
-            make_tuple(number<NumIssues>{},   // n0 - same as Store
-                       number<LaneGroups>{},  // n1 - same as Store
-                       number<NumWarps>{},    // n2 - same as Store
-                       number<kKPerBlock / KPack>{},  // k0
-                       number<KPack>{}),              // k1
-            make_tuple(number<NumWarps * (WarpSize * KVector + kPad)>{},  // stride for n0
-                       number<kKPerBlock>{},                               // stride for n1
-                       number<WarpSize * KVector + kPad>{},                // stride for n2
-                       number<KPack>{},                                    // stride for k0
-                       number<1>{}),                                       // stride for k1
+            make_tuple(number<kNPerBlock>{}, number<kKPerBlock / KPack>{}, number<KPack>{}),
+            make_tuple(number<kKPerBlock + kPad>{}, number<KPack>{}, number<1>{}),
             number<KPack>{},
             number<1>{});
 
-        // Transform matches Store: sequence<0, 1, 2>{} for N merge
+        // Merge K dimensions to get [N, K] logical view
         constexpr auto v_lds_block_desc = transform_tensor_descriptor(
             v_lds_block_desc_0,
             make_tuple(
-                make_merge_transform(make_tuple(number<NumIssues>{}, number<LaneGroups>{}, number<NumWarps>{})),
+                make_pass_through_transform(number<kNPerBlock>{}),
                 make_merge_transform(make_tuple(number<kKPerBlock / KPack>{}, number<KPack>{}))),
-            make_tuple(sequence<0, 1, 2>{}, sequence<3, 4>{}),
+            make_tuple(sequence<0>{}, sequence<1, 2>{}),
             make_tuple(sequence<0>{}, sequence<1>{}));
 
         return v_lds_block_desc;
@@ -453,23 +412,15 @@ struct BlockFmhaV3WmmaPipelinePolicy
             return NPerWarp * NumWarps * KIssues * WarpKSliceWithPad;  // 4 * 8 * 2 * 72 = 4608
         }();
 
-        // V LDS size
+        // V LDS size with simple 2D layout
         constexpr index_t SingleVSize = [&]() {
             using VDataType = remove_cvref_t<typename Problem::VDataType>;
             constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32
             constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32
-            constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
-            constexpr index_t WarpSize   = 32;
+            constexpr index_t kPad = kVLdsPadInBytes / sizeof(VDataType); // 32
 
-            constexpr index_t KVector = GetAlignmentV<Problem>();  // 2
-            constexpr index_t kPad = kVLdsPadInBytes / sizeof(VDataType);  // 32
-
-            constexpr index_t LanesPerK = kKPerBlock / KVector;  // 16
-            constexpr index_t LaneGroups = WarpSize / LanesPerK; // 2
-            constexpr index_t NumIssues = kNPerBlock / (LaneGroups * NumWarps);  // 2
-
-            // Total: NumIssues * NumWarps * (WarpSize * KVector + kPad)
-            return NumIssues * NumWarps * (WarpSize * KVector + kPad);  // 2 * 8 * 96 = 1536
+            // Simple 2D layout: N rows × (K + pad) columns
+            return kNPerBlock * (kKPerBlock + kPad);  // 32 * 64 = 2048
         }();
 
         return max(SingleKSize, SingleVSize);
