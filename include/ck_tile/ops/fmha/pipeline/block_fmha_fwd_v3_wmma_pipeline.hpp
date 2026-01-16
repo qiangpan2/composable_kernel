@@ -931,11 +931,26 @@ struct BlockFmhaFwdV3WmmaPipeline
                 // Direct use of union causes threads to read wrong data -> NaN in GEMM1
                 // Solution: Store sp_compute to LDS with simple 2D layout, reload with GEMM1 A dist
                 
-                // Store sp.p (with GEMM0 C distribution) to P LDS
-                // NOTE: After softmax, union memory contains fp16 P values (written via sp.p)
-                // DO NOT read sp_compute (fp32 interpretation) - it would misinterpret fp16 as fp32!
-                // sp.p is already PDataType (fp16), no conversion needed
-                store_tile(p_lds_window_store, sp(sp_reg_idx).p);
+                // CRITICAL FIX: Use GEMM0 C distribution for store
+                // sp.p is DECLARED with GEMM1 A distribution but CONTAINS data in GEMM0 C layout
+                // (due to union with sp_compute). We must create a tile with correct GEMM0 C
+                // distribution to ensure data is written to correct LDS positions.
+                
+                // Create tile with GEMM0 C distribution (matching actual data layout)
+                auto p_tile_gemm0_c = make_static_distributed_tensor<PDataType>(
+                    Policy::template MakeSPComputeDistribution<Problem>());
+                
+                // Verify thread_buf_ sizes match at compile time
+                static_assert(
+                    decltype(p_tile_gemm0_c.thread_buf_)::size() == 
+                    decltype(sp(sp_reg_idx).p.thread_buf_)::size(),
+                    "P tile thread_buf_ size mismatch between GEMM0 C and GEMM1 A distributions");
+                
+                // Copy thread_buf_ (compiler optimizes to no-op)
+                p_tile_gemm0_c.thread_buf_ = sp(sp_reg_idx).p.thread_buf_;
+                
+                // Store with correct GEMM0 C distribution
+                store_tile(p_lds_window_store, p_tile_gemm0_c);
                 
                 // Sync to ensure all threads have written to LDS
                 block_sync_lds();
@@ -971,12 +986,24 @@ struct BlockFmhaFwdV3WmmaPipeline
             else
             {
                 // Note: Since k1_loops == 1 (v3 constraint), slice is full tile access
-                // CRITICAL FIX: Redistribute P from GEMM0 C distribution to GEMM1 A distribution
+                // CRITICAL FIX (Phase 29): Use GEMM0 C distribution for store
                 // Same fix as the gemm lambda above - see detailed comments there
                 
-                // Store sp.p (already fp16, with GEMM0 C distribution) to P LDS
-                // DO NOT read sp_compute - it would misinterpret fp16 as fp32!
-                store_tile(p_lds_window_store, sp(sp_reg_idx).p);
+                // Create tile with GEMM0 C distribution (matching actual data layout)
+                auto p_tile_gemm0_c_cl = make_static_distributed_tensor<PDataType>(
+                    Policy::template MakeSPComputeDistribution<Problem>());
+                
+                // Verify thread_buf_ sizes match at compile time
+                static_assert(
+                    decltype(p_tile_gemm0_c_cl.thread_buf_)::size() == 
+                    decltype(sp(sp_reg_idx).p.thread_buf_)::size(),
+                    "P tile thread_buf_ size mismatch between GEMM0 C and GEMM1 A distributions");
+                
+                // Copy thread_buf_ (compiler optimizes to no-op)
+                p_tile_gemm0_c_cl.thread_buf_ = sp(sp_reg_idx).p.thread_buf_;
+                
+                // Store with correct GEMM0 C distribution
+                store_tile(p_lds_window_store, p_tile_gemm0_c_cl);
                 block_sync_lds();
                 
                 // Load from P LDS with GEMM1 A distribution
