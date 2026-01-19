@@ -196,12 +196,16 @@ struct BlockGemmARegBRegCRegV2FmhaWmma
                             merge_sequences(sequence<mIter, nIter>{}, c_warp_y_index_zeros),
                             merge_sequences(sequence<1, 1>{}, c_warp_y_lengths));
 
-                        // Debug: check B (V) and C (O) warp slicing values before WarpGemm
+                        // Debug: check buffer sizes and B/C warp slicing values
                         if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 
                             && mIter == 0 && kIter == 0 && nIter == 0) {
-                            printf("[DBG] GEMM1 B_warp[0]=%f, C_before[0]=%f\n",
-                                   static_cast<float>(b_warp_tensor.get_thread_buffer()[0]),
-                                   static_cast<float>(c_warp_tensor.get_thread_buffer()[0]));
+                            printf("[DBG] C_block size=%d, C_warp size=%d\n",
+                                   static_cast<int>(c_block_tensor.thread_buf_.size()),
+                                   static_cast<int>(c_warp_tensor.get_thread_buffer().size()));
+                            printf("[DBG] C_block[0]=%f, C_slice[0]=%f, B_warp[0]=%f\n",
+                                   static_cast<float>(c_block_tensor.thread_buf_[0]),
+                                   static_cast<float>(c_warp_tensor.get_thread_buffer()[0]),
+                                   static_cast<float>(b_warp_tensor.get_thread_buffer()[0]));
                         }
 
                         // warp GEMM
@@ -210,8 +214,9 @@ struct BlockGemmARegBRegCRegV2FmhaWmma
                         // Debug: check C after WarpGemm
                         if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 
                             && mIter == 0 && kIter == 0 && nIter == 0) {
-                            printf("[DBG] GEMM1 C_after[0]=%f\n",
-                                   static_cast<float>(c_warp_tensor.get_thread_buffer()[0]));
+                            printf("[DBG] C_after[0]=%f, C_block[0]_before_write=%f\n",
+                                   static_cast<float>(c_warp_tensor.get_thread_buffer()[0]),
+                                   static_cast<float>(c_block_tensor.thread_buf_[0]));
                         }
 
                         // write C warp tensor into C block tensor
@@ -219,6 +224,13 @@ struct BlockGemmARegBRegCRegV2FmhaWmma
                             merge_sequences(sequence<mIter, nIter>{}, c_warp_y_index_zeros),
                             merge_sequences(sequence<1, 1>{}, c_warp_y_lengths),
                             c_warp_tensor.get_thread_buffer());
+
+                        // Debug: check C_block after write
+                        if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 
+                            && mIter == 0 && kIter == 0 && nIter == 0) {
+                            printf("[DBG] C_block[0]_after_write=%f\n",
+                                   static_cast<float>(c_block_tensor.thread_buf_[0]));
+                        }
                     });
                 });
             });
