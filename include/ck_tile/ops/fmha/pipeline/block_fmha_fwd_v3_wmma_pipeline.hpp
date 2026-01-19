@@ -577,7 +577,8 @@ struct BlockFmhaFwdV3WmmaPipeline
 
         // p_tile_for_gemm1: independent tile with GEMM1 A distribution (16 elements per thread)
         // This is separate from the union (sp.p has 8 elements with GEMM0 C distribution)
-        decltype(gemm_1.MakeABlockTile()) p_tile_for_gemm1;
+        auto p_tile_for_gemm1 = make_static_distributed_tensor<PDataType>(
+            Policy::template MakePRegTileDistributionForGemm1<Problem>());
 
         {
             auto origin_q      = load_tile(q_dram_window);
