@@ -1093,7 +1093,17 @@ struct BlockFmhaFwdV3WmmaPipeline
                     }
                     s_waitcnt_lgkmcnt<0>();
                     __builtin_amdgcn_sched_barrier(0);
+                    // Debug: check o_acc before cl_calc(gemm0)
+                    if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                        printf("[DBG] before cl_calc(gemm0) W0-3: o_acc[0]=%f\n",
+                               static_cast<float>(o_acc.thread_buf_[0]));
+                    }
                     cl_calc(sp_p01_reg_idx, gemm0);
+                    // Debug: check o_acc after cl_calc(gemm0)
+                    if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                        printf("[DBG] after cl_calc(gemm0) W0-3: o_acc[0]=%f\n",
+                               static_cast<float>(o_acc.thread_buf_[0]));
+                    }
                     fmha_alu1(sp_p23_reg_idx);
                     fmha_logits_trans(sp_p01_reg_idx);
 
@@ -1168,7 +1178,17 @@ struct BlockFmhaFwdV3WmmaPipeline
                     __builtin_amdgcn_sched_barrier(0);
                     asm volatile("s_nop 1");
                     __builtin_amdgcn_sched_barrier(0);
+                    // Debug: check o_acc before cl_calc(gemm0)
+                    if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                        printf("[DBG] before cl_calc(gemm0) W4-7: o_acc[0]=%f\n",
+                               static_cast<float>(o_acc.thread_buf_[0]));
+                    }
                     cl_calc(sp_p01_reg_idx, gemm0);
+                    // Debug: check o_acc after cl_calc(gemm0)
+                    if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                        printf("[DBG] after cl_calc(gemm0) W4-7: o_acc[0]=%f\n",
+                               static_cast<float>(o_acc.thread_buf_[0]));
+                    }
                     fmha_alu1(sp_p23_reg_idx);
                     fmha_logits_trans(sp_p01_reg_idx);
 
