@@ -196,8 +196,23 @@ struct BlockGemmARegBRegCRegV2FmhaWmma
                             merge_sequences(sequence<mIter, nIter>{}, c_warp_y_index_zeros),
                             merge_sequences(sequence<1, 1>{}, c_warp_y_lengths));
 
+                        // Debug: check B (V) and C (O) warp slicing values before WarpGemm
+                        if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 
+                            && mIter == 0 && kIter == 0 && nIter == 0) {
+                            printf("[DBG] GEMM1 B_warp[0]=%f, C_before[0]=%f\n",
+                                   static_cast<float>(b_warp_tensor.get_thread_buffer()[0]),
+                                   static_cast<float>(c_warp_tensor.get_thread_buffer()[0]));
+                        }
+
                         // warp GEMM
                         WarpGemm{}(c_warp_tensor, a_warp_tensor, b_warp_tensor);
+
+                        // Debug: check C after WarpGemm
+                        if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 
+                            && mIter == 0 && kIter == 0 && nIter == 0) {
+                            printf("[DBG] GEMM1 C_after[0]=%f\n",
+                                   static_cast<float>(c_warp_tensor.get_thread_buffer()[0]));
+                        }
 
                         // write C warp tensor into C block tensor
                         c_block_tensor.set_y_sliced_thread_data(
