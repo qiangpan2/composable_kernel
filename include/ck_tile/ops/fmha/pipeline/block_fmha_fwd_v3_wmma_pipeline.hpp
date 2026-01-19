@@ -562,10 +562,22 @@ struct BlockFmhaFwdV3WmmaPipeline
                                  Policy::template MakeVRegTileDistribution<Problem>());
         });
 
-        // NOTE: With custom BlockGemmARegBRegCRegV2FmhaWmma, GEMM1 now accepts GEMM0 C distribution
-        // as its A input. sp.p has GEMM0 C distribution (same as sp_compute), so we can pass
-        // it directly to GEMM1 without LDS redistribution. This eliminates extra SMEM usage
-        // and improves performance.
+        // P tile LDS redistribution: GEMM0 C distribution -> GEMM1 A distribution
+        // This is needed because GEMM0 C splits N across warps, but GEMM1 needs full K per warp
+        constexpr index_t p_lds_offset = 4 * Policy::template GetSmemSizeKV<Problem>();
+        auto p_lds_store_window = make_lds_tile_window<PDataType>(
+            static_cast<char*>(smem_ptr) + p_lds_offset,
+            Policy::template MakePLdsStoreBlockDescriptor<Problem>());
+
+        auto p_lds_load_window = make_tile_window(
+            make_lds_tile_window<PDataType>(
+                static_cast<char*>(smem_ptr) + p_lds_offset,
+                Policy::template MakePLdsLoadBlockDescriptor<Problem>()),
+            Policy::template MakePRegTileDistributionForGemm1<Problem>());
+
+        // p_tile_for_gemm1: independent tile with GEMM1 A distribution (16 elements per thread)
+        // This is separate from the union (sp.p has 8 elements with GEMM0 C distribution)
+        decltype(gemm_1.MakeABlockTile()) p_tile_for_gemm1;
 
         {
             auto origin_q      = load_tile(q_dram_window);
@@ -920,20 +932,21 @@ struct BlockFmhaFwdV3WmmaPipeline
             }
             else
             {
-                // Note: Since k1_loops == 1 (v3 constraint), slice is full tile access
-                // With BlockGemmARegBRegCRegV2FmhaWmma, GEMM1 accepts GEMM0 C distribution as A input.
-                // sp.p now has GEMM0 C distribution (same as sp_compute), so we can pass it
-                // directly to GEMM1 without LDS redistribution.
+                // P tile LDS redistribution: GEMM0 C -> GEMM1 A
+                // Required because GEMM0 C splits N across warps, but GEMM1 needs full K per warp
+                store_tile(p_lds_store_window, sp(sp_reg_idx).p);  // Store with GEMM0 C distribution
+                block_sync_lds();
+                p_tile_for_gemm1 = load_tile(p_lds_load_window);   // Load with GEMM1 A distribution
                 
                 // Debug: P and V before GEMM1
                 if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
-                    printf("[DBG] P[0]=%f V[0]=%f\n", 
-                           type_convert<float>(sp(sp_reg_idx).p.thread_buf_[0]),
+                    printf("[DBG] P[0]=%f (redistributed) V[0]=%f\n", 
+                           type_convert<float>(p_tile_for_gemm1.thread_buf_[0]),
                            type_convert<float>(kv_tile.v_tile.thread_buf_[0]));
                 }
                 
-                // Pass sp.p directly to GEMM1 (no redistribution needed!)
-                gemm_1(o_acc, sp(sp_reg_idx).p, kv_tile.v_tile);
+                // Use redistributed P tile for GEMM1
+                gemm_1(o_acc, p_tile_for_gemm1, kv_tile.v_tile);
 
                 // NaN Debug: GEMM1
                 if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
@@ -952,9 +965,13 @@ struct BlockFmhaFwdV3WmmaPipeline
             }
             else
             {
-                // Note: Since k1_loops == 1 (v3 constraint), slice is full tile access
-                // Pass sp.p directly to GEMM1 (no redistribution needed!)
-                gemm_1(o_acc, sp(sp_reg_idx).p, kv_tile.v_tile);
+                // P tile LDS redistribution: GEMM0 C -> GEMM1 A
+                store_tile(p_lds_store_window, sp(sp_reg_idx).p);
+                block_sync_lds();
+                p_tile_for_gemm1 = load_tile(p_lds_load_window);
+                
+                // Use redistributed P tile for GEMM1
+                gemm_1(o_acc, p_tile_for_gemm1, kv_tile.v_tile);
 
                 // Debug: after gemm_1, before fmha_alu0
                 if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
