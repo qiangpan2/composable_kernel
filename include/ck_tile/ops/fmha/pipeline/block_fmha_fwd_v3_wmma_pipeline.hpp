@@ -955,7 +955,20 @@ struct BlockFmhaFwdV3WmmaPipeline
                 // Note: Since k1_loops == 1 (v3 constraint), slice is full tile access
                 // Pass sp.p directly to GEMM1 (no redistribution needed!)
                 gemm_1(o_acc, sp(sp_reg_idx).p, kv_tile.v_tile);
+
+                // Debug: after gemm_1, before fmha_alu0
+                if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                    printf("[DBG] cl_calc after gemm_1: o_acc[0]=%f\n",
+                           static_cast<float>(o_acc.thread_buf_[0]));
+                }
+
                 fmha_alu0(number<1>{} - sp_reg_idx);
+
+                // Debug: after fmha_alu0
+                if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                    printf("[DBG] cl_calc after fmha_alu0: o_acc[0]=%f\n",
+                           static_cast<float>(o_acc.thread_buf_[0]));
+                }
             }
         };
 
