@@ -866,6 +866,13 @@ struct BlockFmhaFwdV3WmmaPipeline
                 printf("[DBG] l=%f\n", type_convert<float>(l.thread_buf_[0]));
             }
 
+            // Debug: check o_acc before scaling in fmha_alu1
+            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] fmha_alu1: o_acc[0]=%f * o_acc_scale=%f\n",
+                       static_cast<float>(o_acc.thread_buf_[0]),
+                       static_cast<float>(o_acc_scale));
+            }
+
             // update partial o_acc [0, fmha_alu_D_reg_cnt)
             static_for<0, fmha_alu_D_reg_cnt, 1>{}([&](auto idx) {
                 o_acc.thread_buf_[idx] = detail::mul_impl_vv_wmma(o_acc.thread_buf_[idx], o_acc_scale);
@@ -963,6 +970,14 @@ struct BlockFmhaFwdV3WmmaPipeline
                     return ck_tile::exp2(scale_s * (m_old.thread_buf_[0] - m.thread_buf_[0]));
                 }
             }();
+
+            // Debug: check o_acc_scale computation
+            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] fmha_alu_D_upd: m_old=%f, m=%f, o_acc_scale=%f\n",
+                       static_cast<float>(m_old.thread_buf_[0]),
+                       static_cast<float>(m.thread_buf_[0]),
+                       static_cast<float>(o_acc_scale));
+            }
 
             fp32x2_t pk_o_acc_scale;
             pk_o_acc_scale.x = o_acc_scale;
