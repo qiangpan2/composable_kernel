@@ -134,8 +134,8 @@ struct BlockGemmARegBRegCRegV2FmhaWmma
                     if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 
                         && kIter == 0 && mIter == 0) {
                         printf("[DBG] GEMM1 warp slice (KMN): A_block[0]=%f, A_warp[0]=%f\n",
-                               (float)a_block_tensor.thread_buf_[0],
-                               (float)a_warp_tensor.get_thread_buffer()[0]);
+                               static_cast<float>(a_block_tensor.thread_buf_[0]),
+                               static_cast<float>(a_warp_tensor.get_thread_buffer()[0]));
                     }
 
                     static_for<0, NIterPerWarp, 1>{}([&](auto nIter) {
@@ -178,8 +178,8 @@ struct BlockGemmARegBRegCRegV2FmhaWmma
                         if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 
                             && mIter == 0 && kIter == 0) {
                             printf("[DBG] GEMM1 warp slice (MNK): A_block[0]=%f, A_warp[0]=%f\n",
-                                   (float)a_block_tensor.thread_buf_[0],
-                                   (float)a_warp_tensor.get_thread_buffer()[0]);
+                                   static_cast<float>(a_block_tensor.thread_buf_[0]),
+                                   static_cast<float>(a_warp_tensor.get_thread_buffer()[0]));
                         }
 
                         // read B warp tensor from B block tensor
