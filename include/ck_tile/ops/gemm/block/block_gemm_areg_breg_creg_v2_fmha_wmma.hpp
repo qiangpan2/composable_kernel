@@ -214,6 +214,9 @@ struct BlockGemmARegBRegCRegV2FmhaWmma
                             printf("[DBG] kIter=1: C_slice_read[0]=%f, C_block_before[0]=%f\n",
                                    static_cast<float>(c_warp_tensor.get_thread_buffer()[0]),
                                    static_cast<float>(c_block_tensor.thread_buf_[0]));
+                            printf("[DBG] kIter=1: A_warp[0]=%f, B_warp[0]=%f\n",
+                                   static_cast<float>(a_warp_tensor.get_thread_buffer()[0]),
+                                   static_cast<float>(b_warp_tensor.get_thread_buffer()[0]));
                         }
 
                         // warp GEMM
