@@ -565,9 +565,12 @@ struct BlockFmhaFwdV3WmmaPipeline
         // P tile LDS redistribution: GEMM0 C distribution -> GEMM1 A distribution
         // This is needed because GEMM0 C splits N across warps, but GEMM1 needs full K per warp
         constexpr index_t p_lds_offset = 4 * Policy::template GetSmemSizeKV<Problem>();
-        auto p_lds_store_window = make_lds_tile_window<PDataType>(
-            static_cast<char*>(smem_ptr) + p_lds_offset,
-            Policy::template MakePLdsStoreBlockDescriptor<Problem>());
+        // Store window uses GEMM0 C distribution (matching sp.p)
+        auto p_lds_store_window = make_tile_window(
+            make_lds_tile_window<PDataType>(
+                static_cast<char*>(smem_ptr) + p_lds_offset,
+                Policy::template MakePLdsStoreBlockDescriptor<Problem>()),
+            Policy::template MakePRegTileDistributionForStore<Problem>());
 
         auto p_lds_load_window = make_tile_window(
             make_lds_tile_window<PDataType>(

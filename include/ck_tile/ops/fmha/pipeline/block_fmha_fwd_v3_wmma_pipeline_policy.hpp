@@ -302,6 +302,16 @@ struct BlockFmhaV3WmmaPipelinePolicy
         return make_static_tile_distribution(BlockGemm::MakeABlockDistributionEncode());
     }
 
+    // Distribution for storing P to LDS (matching sp.p which uses GEMM0 C distribution)
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakePRegTileDistributionForStore()
+    {
+        using namespace ck_tile;
+        // Return GEMM0 C distribution (matching sp.p from softmax output)
+        using BlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<Problem>())>;
+        return make_static_tile_distribution(BlockGemm::MakeCBlockDistributionEncode());
+    }
+
     // ========================================================================
     // LDS layout - rewritten for wave32 with KIssues
     // ========================================================================
