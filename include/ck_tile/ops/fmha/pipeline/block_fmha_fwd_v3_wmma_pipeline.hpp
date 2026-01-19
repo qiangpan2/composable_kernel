@@ -1000,6 +1000,15 @@ struct BlockFmhaFwdV3WmmaPipeline
             /// NOTICE: Use inline asm v_pk_mul_f32 to reduce latency. The fmha_alu_D_upd() call
             /// should be placed at the end of a phase.
             // update partial o_acc after [issued_D_reg_cnt]
+
+            // Debug: before packed multiply loop
+            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] before pk_mul loop: o_acc[0]=%f, issued_D_reg_cnt=%d, size=%d\n",
+                       static_cast<float>(o_acc.thread_buf_[0]),
+                       static_cast<int>(issued_D_reg_cnt),
+                       static_cast<int>(o_acc.thread_buf_.size()));
+            }
+
             static_for<issued_D_reg_cnt, o_acc.thread_buf_.size(), 2>{}([&](auto idx) {
                 fp32x2_t input;
                 input.x = o_acc.thread_buf_[idx];
@@ -1010,6 +1019,12 @@ struct BlockFmhaFwdV3WmmaPipeline
                 o_acc.thread_buf_[idx]     = output.x;
                 o_acc.thread_buf_[idx + 1] = output.y;
             });
+
+            // Debug: after packed multiply loop (end of fmha_alu_D_upd)
+            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] end of fmha_alu_D_upd: o_acc[0]=%f\n",
+                       static_cast<float>(o_acc.thread_buf_[0]));
+            }
         };
 
         auto fmha_mask = [&](auto sp_reg_idx) {
