@@ -9,6 +9,7 @@
 #include "ck_tile/core.hpp"
 #include "ck_tile/core/tensor/tile_elementwise.hpp"
 #include "ck_tile/ops/common.hpp"
+#include "ck_tile/ops/common/utils.hpp"
 #include "ck_tile/host/concat.hpp"
 #include "ck_tile/core/utility/env.hpp"
 #include "ck_tile/host/convolution_parameter.hpp"
