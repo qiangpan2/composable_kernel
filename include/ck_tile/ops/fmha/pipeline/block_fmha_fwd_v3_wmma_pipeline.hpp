@@ -817,29 +817,31 @@ struct BlockFmhaFwdV3WmmaPipeline
             
             // Cross-warp reduction for m_latest via LDS (max reduction)
             // block_tile_reduce_sync only reduces within a warp, we need to reduce across N-warps
+            // Only reduce within the same M-warp group (NWarp warps per group)
             {
-                constexpr index_t NumWarps = Problem::kBlockSize / 32;  // 8 warps
+                constexpr index_t NWarp = Problem::BlockFmhaShape::Gemm0BlockWarps::at(number<1>{});
                 const index_t warp_id = threadIdx.x / 32;
                 const index_t lane_id = threadIdx.x % 32;
+                const index_t m_warp_id = warp_id / NWarp;  // Which M-warp group (0, 1, 2, 3)
                 
-                // Only lane 0 of each warp stores to LDS
+                // Lane 0 of each warp stores to LDS[warp_id]
                 if (lane_id == 0) {
                     reduce_lds[warp_id] = m_latest.thread_buf_[0];
                 }
                 __syncthreads();
                 
-                // Thread 0 reduces all warp values (max) and stores result
-                if (threadIdx.x == 0) {
-                    float max_val = reduce_lds[0];
-                    for (index_t w = 1; w < NumWarps; ++w) {
-                        max_val = f_max(max_val, reduce_lds[w]);
+                // Each warp's lane 0 reduces its M-warp group
+                if (lane_id == 0) {
+                    float max_val = reduce_lds[m_warp_id * NWarp];
+                    for (index_t n = 1; n < NWarp; ++n) {
+                        max_val = f_max(max_val, reduce_lds[m_warp_id * NWarp + n]);
                     }
-                    reduce_lds[0] = max_val;
+                    reduce_lds[m_warp_id * NWarp] = max_val;
                 }
                 __syncthreads();
                 
-                // All threads read the reduced value
-                m_latest.thread_buf_[0] = reduce_lds[0];
+                // All threads read their M-warp's reduced value
+                m_latest.thread_buf_[0] = reduce_lds[m_warp_id * NWarp];
             }
             
             m = m_latest;
@@ -900,29 +902,31 @@ struct BlockFmhaFwdV3WmmaPipeline
             
             // Cross-warp reduction for rowsum_p via LDS
             // block_tile_reduce_sync only reduces within a warp, we need to reduce across N-warps
+            // Only reduce within the same M-warp group (NWarp warps per group)
             {
-                constexpr index_t NumWarps = Problem::kBlockSize / 32;  // 8 warps
+                constexpr index_t NWarp = Problem::BlockFmhaShape::Gemm0BlockWarps::at(number<1>{});
                 const index_t warp_id = threadIdx.x / 32;
                 const index_t lane_id = threadIdx.x % 32;
+                const index_t m_warp_id = warp_id / NWarp;  // Which M-warp group (0, 1, 2, 3)
                 
-                // Only lane 0 of each warp stores to LDS
+                // Lane 0 of each warp stores to LDS[warp_id]
                 if (lane_id == 0) {
                     reduce_lds[warp_id] = rowsum_p.thread_buf_[0];
                 }
                 __syncthreads();
                 
-                // Thread 0 reduces all warp values and stores result
-                if (threadIdx.x == 0) {
+                // Each warp's lane 0 reduces its M-warp group
+                if (lane_id == 0) {
                     float total = 0.f;
-                    for (index_t w = 0; w < NumWarps; ++w) {
-                        total += reduce_lds[w];
+                    for (index_t n = 0; n < NWarp; ++n) {
+                        total += reduce_lds[m_warp_id * NWarp + n];
                     }
-                    reduce_lds[0] = total;
+                    reduce_lds[m_warp_id * NWarp] = total;
                 }
                 __syncthreads();
                 
-                // All threads read the reduced value
-                rowsum_p.thread_buf_[0] = reduce_lds[0];
+                // All threads read their M-warp's reduced value
+                rowsum_p.thread_buf_[0] = reduce_lds[m_warp_id * NWarp];
             }
             
             // Debug: rowsum AFTER cross-warp reduction
