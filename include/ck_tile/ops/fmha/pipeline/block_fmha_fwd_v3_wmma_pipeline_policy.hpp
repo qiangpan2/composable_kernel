@@ -269,6 +269,16 @@ struct BlockFmhaV3WmmaPipelinePolicy
         return M * (K + kPLdsPad) * sizeof(typename Problem::PDataType);  // 64 * 40 * 2 = 5120 bytes
     }
 
+    // Cross-warp reduction LDS size (for rowsum and m reduction across N-warps)
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetReduceLdsSize()
+    {
+        // Need space for each warp to store its local reduction value
+        // 8 warps (256 threads / 32) * sizeof(float) = 32 bytes
+        // Align to 128 bytes for safety
+        return 128;
+    }
+
     template <typename Problem>
     CK_TILE_DEVICE static constexpr auto MakePLdsStoreBlockDescriptor()
     {
@@ -536,9 +546,10 @@ struct BlockFmhaV3WmmaPipelinePolicy
     template <typename Problem>
     CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetSmemSize()
     {
-        // 4 buffers: K double buffer (2) + V double buffer (2) + P redistribution buffer (1)
+        // 4 buffers: K double buffer (2) + V double buffer (2) + P redistribution buffer (1) + reduction buffer
         // P LDS is needed to redistribute P from GEMM0 C layout to GEMM1 A layout
-        return 4 * GetSmemSizeKV<Problem>() + GetPLdsSize<Problem>();
+        // Reduce LDS is needed for cross-warp reduction of rowsum_p and m
+        return 4 * GetSmemSizeKV<Problem>() + GetPLdsSize<Problem>() + GetReduceLdsSize<Problem>();
     }
 };
 

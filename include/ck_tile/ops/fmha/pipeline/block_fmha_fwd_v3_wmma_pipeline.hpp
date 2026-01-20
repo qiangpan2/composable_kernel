@@ -583,6 +583,12 @@ struct BlockFmhaFwdV3WmmaPipeline
         auto p_tile_for_gemm1 = make_static_distributed_tensor<PDataType>(
             Policy::template MakePRegTileDistributionForGemm1<Problem>());
 
+        // Cross-warp reduction LDS for rowsum_p and m
+        // Needed because block_tile_reduce_sync only reduces within a warp, not across warps
+        constexpr index_t reduce_lds_offset = 4 * Policy::template GetSmemSizeKV<Problem>() 
+                                            + Policy::template GetPLdsSize<Problem>();
+        float* reduce_lds = reinterpret_cast<float*>(static_cast<char*>(smem_ptr) + reduce_lds_offset);
+
         {
             auto origin_q      = load_tile(q_dram_window);
             auto transformed_q = tile_elementwise_in(q_element_func, origin_q);
@@ -808,6 +814,34 @@ struct BlockFmhaFwdV3WmmaPipeline
                 sp(sp_reg_idx).sp_compute, sequence<1>{}, f_max, m.thread_buf_[0]);
             // WMMA: Use block_tile_reduce_sync instead of permlane32_swap
             block_tile_reduce_sync(m_latest, f_max, bool_constant<false>{});
+            
+            // Cross-warp reduction for m_latest via LDS (max reduction)
+            // block_tile_reduce_sync only reduces within a warp, we need to reduce across N-warps
+            {
+                constexpr index_t NumWarps = Problem::kBlockSize / 32;  // 8 warps
+                const index_t warp_id = threadIdx.x / 32;
+                const index_t lane_id = threadIdx.x % 32;
+                
+                // Only lane 0 of each warp stores to LDS
+                if (lane_id == 0) {
+                    reduce_lds[warp_id] = m_latest.thread_buf_[0];
+                }
+                __syncthreads();
+                
+                // Thread 0 reduces all warp values (max) and stores result
+                if (threadIdx.x == 0) {
+                    float max_val = reduce_lds[0];
+                    for (index_t w = 1; w < NumWarps; ++w) {
+                        max_val = f_max(max_val, reduce_lds[w]);
+                    }
+                    reduce_lds[0] = max_val;
+                }
+                __syncthreads();
+                
+                // All threads read the reduced value
+                m_latest.thread_buf_[0] = reduce_lds[0];
+            }
+            
             m = m_latest;
 
             // NaN Debug: m value
@@ -863,6 +897,33 @@ struct BlockFmhaFwdV3WmmaPipeline
             
             // WMMA: Use block_tile_reduce_sync instead of permlane32_swap
             block_tile_reduce_sync(rowsum_p, f_sum, bool_constant<false>{});
+            
+            // Cross-warp reduction for rowsum_p via LDS
+            // block_tile_reduce_sync only reduces within a warp, we need to reduce across N-warps
+            {
+                constexpr index_t NumWarps = Problem::kBlockSize / 32;  // 8 warps
+                const index_t warp_id = threadIdx.x / 32;
+                const index_t lane_id = threadIdx.x % 32;
+                
+                // Only lane 0 of each warp stores to LDS
+                if (lane_id == 0) {
+                    reduce_lds[warp_id] = rowsum_p.thread_buf_[0];
+                }
+                __syncthreads();
+                
+                // Thread 0 reduces all warp values and stores result
+                if (threadIdx.x == 0) {
+                    float total = 0.f;
+                    for (index_t w = 0; w < NumWarps; ++w) {
+                        total += reduce_lds[w];
+                    }
+                    reduce_lds[0] = total;
+                }
+                __syncthreads();
+                
+                // All threads read the reduced value
+                rowsum_p.thread_buf_[0] = reduce_lds[0];
+            }
             
             // Debug: rowsum AFTER cross-warp reduction
             if ((threadIdx.x == 0 || threadIdx.x == 32) && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
