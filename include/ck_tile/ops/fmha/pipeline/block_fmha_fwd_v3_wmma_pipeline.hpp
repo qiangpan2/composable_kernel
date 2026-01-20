@@ -853,8 +853,23 @@ struct BlockFmhaFwdV3WmmaPipeline
                 SMPLComputeDataType{0}); // rowsum(Pcompute{j})
             static_assert(rowsum_p.thread_buf_.size() == 1,
                           "assuming that each thread holds 1 rowsum value");
+            
+            // Debug: rowsum BEFORE cross-warp reduction
+            if ((threadIdx.x == 0 || threadIdx.x == 32) && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] rowsum_BEFORE_sync: warp=%d, rowsum_p=%f\n",
+                       static_cast<int>(threadIdx.x / 32),
+                       static_cast<float>(rowsum_p.thread_buf_[0]));
+            }
+            
             // WMMA: Use block_tile_reduce_sync instead of permlane32_swap
             block_tile_reduce_sync(rowsum_p, f_sum, bool_constant<false>{});
+            
+            // Debug: rowsum AFTER cross-warp reduction
+            if ((threadIdx.x == 0 || threadIdx.x == 32) && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                printf("[DBG] rowsum_AFTER_sync: warp=%d, rowsum_p=%f\n",
+                       static_cast<int>(threadIdx.x / 32),
+                       static_cast<float>(rowsum_p.thread_buf_[0]));
+            }
 
             // l{j}
             /// Note: The compiler keeps moving the following instructions elsewhere because 'l'
