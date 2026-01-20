@@ -939,22 +939,33 @@ struct BlockFmhaFwdV3WmmaPipeline
                 // P tile LDS redistribution: GEMM0 C -> GEMM1 A
                 // Required because GEMM0 C splits N across warps, but GEMM1 needs full K per warp
                 store_tile(p_lds_store_window, sp(sp_reg_idx).p);  // Store with GEMM0 C distribution
+                
+                // Debug: Store - verify warp separation
+                if ((threadIdx.x == 0 || threadIdx.x == 32) && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                    printf("[DBG] P_LDS_STORE: warp=%d, sp.p[0]=%f\n",
+                           static_cast<int>(threadIdx.x / 32),
+                           static_cast<float>(sp(sp_reg_idx).p.thread_buf_[0]));
+                }
+                
                 block_sync_lds();
                 p_tile_for_gemm1 = load_tile(p_lds_load_window);   // Load with GEMM1 A distribution
                 
-                // Debug: P and V before GEMM1
-                if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
-                    printf("[DBG] P[0]=%f (redistributed) V[0]=%f\n", 
-                           type_convert<float>(p_tile_for_gemm1.thread_buf_[0]),
-                           type_convert<float>(kv_tile.v_tile.thread_buf_[0]));
+                // Debug: Load - verify both warps get full K
+                if ((threadIdx.x == 0 || threadIdx.x == 32) && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                    printf("[DBG] P_LDS_LOAD: warp=%d, p_tile[0]=%f, p_tile[8]=%f\n",
+                           static_cast<int>(threadIdx.x / 32),
+                           static_cast<float>(p_tile_for_gemm1.thread_buf_[0]),
+                           static_cast<float>(p_tile_for_gemm1.thread_buf_[8]));
                 }
                 
                 // Use redistributed P tile for GEMM1
                 gemm_1(o_acc, p_tile_for_gemm1, kv_tile.v_tile);
 
-                // NaN Debug: GEMM1
-                if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
-                    printf("[DBG] GEMM1 o[0]=%f\n", type_convert<float>(o_acc.thread_buf_[0]));
+                // Debug: GEMM1 output per warp
+                if ((threadIdx.x == 0 || threadIdx.x == 32) && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0) {
+                    printf("[DBG] GEMM1_OUT: warp=%d, o_acc[0]=%f\n",
+                           static_cast<int>(threadIdx.x / 32),
+                           static_cast<float>(o_acc.thread_buf_[0]));
                 }
             }
         };
