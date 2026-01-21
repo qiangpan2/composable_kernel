@@ -207,6 +207,10 @@ FMHA_FWD_API_FOOTER_TEMPLATE = """
 float fmha_fwd(fmha_fwd_traits traits, fmha_fwd_args args, const ck_tile::stream_config& config) {{
     const std::string device_name = ck_tile::get_device_name();
 
+    // Check for force v2 environment variable (CK_FMHA_FORCE_V2=1 to force v2 pipeline)
+    const char* force_v2_env = std::getenv("CK_FMHA_FORCE_V2");
+    const bool force_v2 = (force_v2_env != nullptr) && (std::string(force_v2_env) != "0");
+
     const bool is_swa = (traits.mask_type != mask_enum::no_mask) and
                         ((0 < args.window_size_left) or (0 < args.window_size_right));
     const bool can_dispatch_v3 =
@@ -218,7 +222,7 @@ float fmha_fwd(fmha_fwd_traits traits, fmha_fwd_args args, const ck_tile::stream
         (not traits.has_lse) and (not traits.has_dropout) and
         (traits.qscale_type == quant_scale_enum::no_scale) and (not is_swa) and
         (args.nhead_q % args.nhead_k == 0) and (args.hdim_q == 128) and (args.hdim_v == 128);
-    if ({F_is_v3_enabled} and can_dispatch_v3) {{
+    if (!force_v2 && {F_is_v3_enabled} and can_dispatch_v3) {{
         return fmha_fwd_v3(traits, args, config);
     }} else {{
         return fmha_fwd_v2(traits, args, config);
