@@ -25,4 +25,4 @@ cmake --install build
 #   - Self-Attention Shape: [1, 75600, 40, 128]
 #
 # Full scale test: b=1, h=40, s=75600, d=128
-tile_example_fmha_fwd -b=1 -h=40 -s=75600 -d=128 -prec=fp16 -v=1 -repeat=2
+CK_FMHA_USE_V3=1 ./tile_example_fmha_fwd -b=1 -h=40 -s=75600 -d=128 -prec=fp16 -v=0 -repeat=2
