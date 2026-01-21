@@ -17,6 +17,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <iostream>
 
 struct FmhaFwdFp32
 {

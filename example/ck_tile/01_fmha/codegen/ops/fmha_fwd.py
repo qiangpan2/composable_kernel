@@ -24,6 +24,7 @@ from codegen.cpp_symbol_map import (
     get_mask_map,
     get_mask_cpp_type,
     get_mask_cpp_check_expr,
+    get_pipeline_cpp_type,
     QSCALE_CHECK_MAP,
     QSCALE_MAP,
 )
@@ -209,7 +210,9 @@ float fmha_fwd(fmha_fwd_traits traits, fmha_fwd_args args, const ck_tile::stream
     const bool is_swa = (traits.mask_type != mask_enum::no_mask) and
                         ((0 < args.window_size_left) or (0 < args.window_size_right));
     const bool can_dispatch_v3 =
-        (device_name.compare(0, 6, "gfx950") == 0) and
+        ((device_name.compare(0, 6, "gfx950") == 0) or
+         (device_name.compare(0, 5, "gfx11") == 0) or
+         (device_name.compare(0, 5, "gfx12") == 0)) and
         (traits.data_type.compare("fp16") == 0 or traits.data_type.compare("bf16") == 0) and
         traits.is_v_rowmajor and (traits.bias_type == bias_enum::no_bias) and
         (not traits.has_lse) and (not traits.has_dropout) and
@@ -266,6 +269,7 @@ class FmhaFwdApiTrait:
     pipeline_tag: str
     # sync with fmha_fwd_traits<>, to generate fallback calls
     hdim: str
+    hdim_v: str  # actual V head dimension
     dtype: str  # data type
     mode: str  # value from MODE_MAP
     bm0: int  # tile size along q seqlen (block size)
@@ -478,7 +482,7 @@ class FmhaFwdApiPool:
         self.pool = OrderedDict()
 
     def register_traits(self, trait: FmhaFwdApiTrait) -> None:
-        hdim = trait.hdim, trait.bn1
+        hdim = trait.hdim, trait.hdim_v  # FIX: use hdim_v instead of bn1 (tile size)
         ts = (
             self.pool.setdefault(trait.arch, OrderedDict())
             .setdefault(trait.dtype, OrderedDict())
@@ -634,6 +638,7 @@ class FmhaFwdTileSize:
 class FmhaFwdKernel:
     F_arch: ArchTrait
     F_hdim: int  # hdim
+    F_hdim_v: int  # hdim_v - actual V head dimension
     F_dtype: str  # data type
     F_mode: str  # value from MODE_MAP
     F_tile: FmhaFwdTileSize
@@ -696,7 +701,7 @@ class FmhaFwdKernel:
             F_mask=get_mask_cpp_type(self.F_pipeline.F_mask),
             F_mode=MODE_MAP[self.F_mode],
             F_trload=BOOL_MAP[self.F_pipeline.F_trload],
-            F_pipeline=PIPELINE_MAP[self.F_pipeline.tag],
+            F_pipeline=get_pipeline_cpp_type(self.F_pipeline.tag, self.F_arch.name),
             F_kernel=self._get_cpp_kernel_class_name(self.F_pipeline.tag),
             F_kargs_creator=self._get_cpp_kargs_creator_func_name(self.F_pipeline.tag),
             F_sink=BOOL_MAP[self.F_pipeline.F_sink],
@@ -721,6 +726,7 @@ class FmhaFwdKernel:
             arch=self.F_arch,
             pipeline_tag=self.F_pipeline.tag,
             hdim=str(self.F_hdim),
+            hdim_v=str(self.F_hdim_v),
             dtype=self.F_dtype,
             mode=self.F_mode,
             bm0=self.F_tile.F_bm0,
@@ -781,6 +787,7 @@ def create_kernel(
         F_dtype=problem_ctx.dtype,
         F_mode=problem_ctx.mode,
         F_hdim=problem_ctx.hdim,
+        F_hdim_v=problem_ctx.hdim_v,
         F_tile=kernel_ctx.tile,
         F_pipeline=kernel_ctx.pipeline,
     )
@@ -1089,7 +1096,18 @@ class KernelComponentFactoryGfx950(
 
 
 class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
-    arch = ArchTrait("gfx12")
+    # gfx12 (RDNA4)
+    #
+    # NOTE: Do NOT use a combined arch tag like `ck_tile::gfx11_12_t`.
+    # `ck_tile` only defines per-family tags (`gfx11_t`, `gfx12_t`, etc.) in
+    # `include/ck_tile/core/arch/arch.hpp`, and the tag participates in template
+    # dispatch for WMMA backends.
+    arch = ArchTrait(
+        "gfx12",
+        preprocessor_check="defined(__gfx12__)",
+        device_name_check='device_name.compare(0, 5, "gfx12") == 0',
+        filename_suffix="_gfx12",
+    )
 
     _DT_FP16_BF16 = ("fp16", "bf16")
     _DT_FP8_FP8BF16 = ("fp8", "fp8bf16")
@@ -1106,7 +1124,9 @@ class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
                 #                             bm0, bn0, bk0, bn1, bk1,
                 ( 32,  32) : [FmhaFwdTileSize( 64,  64,  16,  32,  32,   32,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
                 ( 64,  64) : [FmhaFwdTileSize( 64,  64,  32,  64,  32,   64,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
-                (128, 128) : [FmhaFwdTileSize( 64,  64,  32, 128,  32,  128,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
+                (128, 128) : [FmhaFwdTileSize( 64,  64,  32, 128,  32,  128,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1),
+                              # v3 WMMA tile: 8 warps (4x2), kK0=128 (k0_loops=1), kN0==kK1=32, 256 threads (NumWarpGroups=2)
+                              FmhaFwdTileSize( 64,  32, 128,  32,  32,  128,  4, 2, 1,  4, 2, 1,  16, 16, 16,  16, 16, 16,  -1)],
                 (192, 128) : [FmhaFwdTileSize( 64,  64,  32, 128,  32,  256,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
                 (256, 256) : [FmhaFwdTileSize( 64,  64,  32, 256,  32,  256,  4, 1, 1,  4, 1, 1,  16, 16, 16,  16, 16, 16,  -1)],
             }  # fmt: skip
@@ -1143,6 +1163,14 @@ class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
             ):
                 pipelines.append(FmhaFwdPipeline("qr", "row", "f", "f", "f", "f", logits, bias, lse, dropout, qscale, mask, skip, "f", sink))  # fmt: skip
                 pipelines.append(FmhaFwdPipeline("qr", "row", "t", "t", "t", "t", logits, bias, lse, dropout, qscale, mask, skip, "f", sink))  # fmt: skip
+
+            # qr_async_trload_v3 for gfx12 (WMMA path): only hdim=hdim_v=128, mask=no/causal, no logits_soft_cap
+            if (hdim, hdim_v) == (128, 128):
+                for mask in ["no", "causal"]:
+                    pipelines.append(FmhaFwdPipeline("qr_async_trload_v3", "row", "t", "t", "f", "f",
+                        F_logits="f", F_bias="no", F_lse="f", F_dropout="f",
+                        F_qscale=qscale, F_mask=mask, F_skip="f", F_trload="t", F_sink="f"))  # fmt: skip
+
         elif dtype in cls._DT_FP8_FP8BF16 or dtype in cls._DT_FP8FP32:
             # no need lse/dropout kernels
             for logits, qscale, mask, bias in itertools.product(
@@ -1151,6 +1179,45 @@ class KernelComponentFactoryGfx12(CompatibilityRuleFactory):
                 pipelines.append(FmhaFwdPipeline("qr", "row", "f", "f", "f", "f", logits, bias, "f", "f", qscale, mask, "f", "f", "f"))  # fmt: skip
                 pipelines.append(FmhaFwdPipeline("qr", "row", "t", "t", "t", "t", logits, bias, "f", "f", qscale, mask, "f", "f", "f"))  # fmt: skip
         return pipelines
+
+    @classmethod
+    def get_rules(cls) -> List[CompatibilityRule]:
+        rules = CompatibilityRuleFactory.get_rules()
+
+        def check_tile_pipeline_v3(
+            problem_ctx: ProblemContext, kernel_ctx: KernelContext
+        ) -> bool:
+            # v3 WMMA pipeline requirements:
+            # 1. kN0 == kK1 (bn0 == bk1) for v3 pipeline constraint
+            # 2. kK0 == 128 (bk0 == 128) for k0_loops == 1
+            # 3. 8 warps (rm0*rn0 == 8) for NumWarpGroups == 2
+            is_v3_pipeline = kernel_ctx.pipeline.tag == "qr_async_trload_v3"
+            tile = kernel_ctx.tile
+            is_v3_tile = (
+                tile.F_bn0 == tile.F_bk1 and  # kN0 == kK1
+                tile.F_bk0 == 128 and         # k0_loops = 128/128 = 1
+                tile.F_rm0 * tile.F_rn0 == 8  # 8 warps for NumWarpGroups = 256/128 = 2
+            )
+            if is_v3_pipeline and not is_v3_tile:
+                return False
+            if is_v3_tile and not is_v3_pipeline:
+                # Don't use v3 tile for non-v3 pipelines
+                return False
+            return True
+
+        rules.append(check_tile_pipeline_v3)
+        return rules
+
+
+class KernelComponentFactoryGfx11(KernelComponentFactoryGfx12):
+    # gfx11 (RDNA3) - shares WMMA shape with gfx12, but needs its own arch tag
+    # for correct backend selection.
+    arch = ArchTrait(
+        "gfx11",
+        preprocessor_check="defined(__gfx11__)",
+        device_name_check='device_name.compare(0, 5, "gfx11") == 0',
+        filename_suffix="_gfx11",
+    )
 
 
 class CustomFactory(KernelComponentFactoryGfx9, CompatibilityRuleFactoryGfx9):
@@ -1174,6 +1241,8 @@ def get_factory(target: str):
     if target.startswith("gfx9"):
         return KernelComponentFactoryGfx9
 
+    if target.startswith("gfx11"):
+        return KernelComponentFactoryGfx11
     if target.startswith("gfx12"):
         return KernelComponentFactoryGfx12
 
@@ -1364,9 +1433,7 @@ def write_fwd_api(
             api_pool.render("fmha_fwd_v3", filter_fn=accept_only_v3),
             FMHA_FWD_API_FOOTER_TEMPLATE.format(
                 F_is_v3_enabled=BOOL_MAP[
-                    # NOTE: enable v3 pipelines when ready
-                    # 0 < api_pool.get_num_traits(filter_fn=accept_only_v3)
-                    False
+                    0 < api_pool.get_num_traits(filter_fn=accept_only_v3)
                 ]
             ),
         ]

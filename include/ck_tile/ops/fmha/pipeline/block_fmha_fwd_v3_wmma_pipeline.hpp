@@ -3,53 +3,54 @@
 
 #pragma once
 
+// WMMA v3 Pipeline for gfx11/gfx12 (RDNA3/RDNA4)
+// This is a specialized version of BlockFmhaFwdV3Pipeline optimized for WMMA instructions.
+// Key differences from MFMA v3:
+// - No MFMA scheduling barriers (CK_TILE_SCHED_BARRIER_MFMA)
+// - Uses synchronous load_tile instead of async_load_tile_raw
+// - Uses load_tile instead of load_tile_transpose for V tile (WMMA has symmetric A/B distribution)
+// - Uses block_tile_reduce_sync instead of permlane32_swap for cross-wave reduction
+
 #include "ck_tile/core.hpp"
 #include "ck_tile/ops/fmha/block/block_attention_bias_enum.hpp"
 #include "ck_tile/ops/fmha/block/block_attention_quant_scale_enum.hpp"
-#include "ck_tile/ops/fmha/pipeline/block_fmha_fwd_v3_pipeline_default_policy.hpp"
+#include "ck_tile/ops/fmha/pipeline/block_fmha_fwd_v3_wmma_pipeline_policy.hpp"
 #include "ck_tile/ops/reduce/block/block_reduce.hpp"
 
-#define ENABLE_ASM_MARKER 1
-#if ENABLE_ASM_MARKER
-#define ASM_MARKER(marker)               \
+#define ENABLE_ASM_MARKER_WMMA 1
+#if ENABLE_ASM_MARKER_WMMA
+#define ASM_MARKER_WMMA(marker)          \
     __builtin_amdgcn_sched_barrier(0);   \
-    asm volatile("; [POYENC] " #marker); \
+    asm volatile("; [WMMA] " #marker);   \
     __builtin_amdgcn_sched_barrier(0);
 #else
-#define ASM_MARKER(marker)
+#define ASM_MARKER_WMMA(marker)
 #endif
 
-#define ADD_SBARRIER_FOR_PHASE0 1
+#define ADD_SBARRIER_FOR_PHASE0_WMMA 1
 #if !defined(CK_TILE_DISABLE_PACKED_FP32)
 #define CK_TILE_DISABLE_PACKED_FP32 0
 #endif
 
-// MFMA scheduling barrier - disabled for WMMA (gfx11/gfx12)
-#if defined(__gfx11__) || defined(__gfx12__)
-#define CK_TILE_SCHED_BARRIER_MFMA(count, mask) /* no-op for WMMA */
-#else
-#define CK_TILE_SCHED_BARRIER_MFMA(count, mask) \
-    __builtin_amdgcn_sched_group_barrier(0x008, count, mask)
-#endif
+#define WARP_ID_WMMA 0
+#define LANE_ID_WMMA 0
 
-#define WARP_ID 0
-#define LANE_ID 0
-
-#define ENABLE_DEBUG_STMTS 1
-#if ENABLE_DEBUG_STMTS
-#define DEBUG_STMTS \
-    if(get_block_1d_id() == 0 && get_warp_id() == WARP_ID && get_lane_id() == LANE_ID)
+#define ENABLE_DEBUG_STMTS_WMMA 1
+#if ENABLE_DEBUG_STMTS_WMMA
+#define DEBUG_STMTS_WMMA \
+    if(get_block_1d_id() == 0 && get_warp_id() == WARP_ID_WMMA && get_lane_id() == LANE_ID_WMMA)
 #else
-#define DEBUG_STMTS if constexpr(false)
+#define DEBUG_STMTS_WMMA if constexpr(false)
 #endif
 
 namespace ck_tile {
 
+// Simplified CoreLoopScheduler for WMMA - no MFMA scheduling barriers
 template <typename PipelineProblem, bool kIsMasking>
-struct CoreLoopScheduler;
+struct CoreLoopSchedulerWmma;
 
 template <typename PipelineProblem>
-struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/true>
+struct CoreLoopSchedulerWmma<PipelineProblem, /*kIsMasking=*/true>
 {
     template <ck_tile::index_t WaveGroup, ck_tile::index_t Phase>
     CK_TILE_DEVICE static constexpr void schedule(ck_tile::number<WaveGroup>,
@@ -57,12 +58,13 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/true>
     {
         using namespace ck_tile;
 
+        // WMMA version: only VALU/SALU barriers, no MFMA scheduling
         if constexpr(WaveGroup == 0)
         {
             if constexpr(Phase == 0)
             {
                 static_for<0, 8, 1>{}([&](auto) {
-                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
+                    // No MFMA barrier - WMMA scheduling handled by compiler
                     __builtin_amdgcn_sched_group_barrier(0x200, 2, 0); // TRANS
                     __builtin_amdgcn_sched_group_barrier(0x002, 2, 0); // VALU
                 });
@@ -78,7 +80,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/true>
                 __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
 #endif
                 static_for<0, 8, 1>{}([&](auto) {
-                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
+                    // No MFMA barrier
                     __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
                 });
             }
@@ -98,7 +100,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/true>
             else if constexpr(Phase == 1)
             {
                 static_for<0, 8, 1>{}([&](auto) {
-                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
+                    // No MFMA barrier
                     __builtin_amdgcn_sched_group_barrier(0x200, 2, 0); // TRANS
                     __builtin_amdgcn_sched_group_barrier(0x002, 2, 0); // VALU
                 });
@@ -114,7 +116,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/true>
                 __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
 #endif
                 static_for<0, 8, 1>{}([&](auto) {
-                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
+                    // No MFMA barrier
                     __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
                 });
             }
@@ -123,7 +125,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/true>
 };
 
 template <typename PipelineProblem>
-struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/false>
+struct CoreLoopSchedulerWmma<PipelineProblem, /*kIsMasking=*/false>
 {
     template <ck_tile::index_t WaveGroup, ck_tile::index_t Phase>
     CK_TILE_DEVICE static constexpr void schedule(ck_tile::number<WaveGroup>,
@@ -131,12 +133,12 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/false>
     {
         using namespace ck_tile;
 
+        // WMMA version: only VALU/SALU barriers, no MFMA scheduling
         if constexpr(WaveGroup == 0)
         {
             if constexpr(Phase == 0)
             {
                 static_for<0, 8, 1>{}([&](auto) {
-                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x200, 2, 0); // TRANS
                     __builtin_amdgcn_sched_group_barrier(0x002, 2, 0); // VALU
                 });
@@ -152,7 +154,6 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/false>
                 __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
 #endif
                 static_for<0, 8, 1>{}([&](auto) {
-                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
                 });
             }
@@ -172,7 +173,6 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/false>
             else if constexpr(Phase == 1)
             {
                 static_for<0, 8, 1>{}([&](auto) {
-                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x200, 2, 0); // TRANS
                     __builtin_amdgcn_sched_group_barrier(0x002, 2, 0); // VALU
                 });
@@ -188,7 +188,6 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/false>
                 __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
 #endif
                 static_for<0, 8, 1>{}([&](auto) {
-                    CK_TILE_SCHED_BARRIER_MFMA(1, 0); // MFMA
                     __builtin_amdgcn_sched_group_barrier(0x002, 4, 0); // VALU
                 });
             }
@@ -197,7 +196,7 @@ struct CoreLoopScheduler<PipelineProblem, /*kIsMasking=*/false>
 };
 
 namespace detail {
-CK_TILE_DEVICE float fma_impl_vsv(float a, float b, float c)
+CK_TILE_DEVICE float fma_impl_vsv_wmma(float a, float b, float c)
 {
 #if CK_TILE_DISABLE_PACKED_FP32
     return a * b + c;
@@ -210,7 +209,7 @@ CK_TILE_DEVICE float fma_impl_vsv(float a, float b, float c)
 #endif
 }
 
-CK_TILE_DEVICE float add_impl_vv(float lhs, float rhs)
+CK_TILE_DEVICE float add_impl_vv_wmma(float lhs, float rhs)
 {
     float result;
     asm volatile("v_add_f32_e32 %[result], %[lhs], %[rhs]"
@@ -219,7 +218,7 @@ CK_TILE_DEVICE float add_impl_vv(float lhs, float rhs)
     return result;
 }
 
-CK_TILE_DEVICE float mul_impl_vv(float lhs, float rhs)
+CK_TILE_DEVICE float mul_impl_vv_wmma(float lhs, float rhs)
 {
     float result;
     asm volatile("v_mul_f32_e32 %[result], %[lhs], %[rhs]"
@@ -228,38 +227,33 @@ CK_TILE_DEVICE float mul_impl_vv(float lhs, float rhs)
     return result;
 }
 
-CK_TILE_DEVICE fp16x2_t cvt_pk_fp16_f32(float a, float b)
+CK_TILE_DEVICE fp16x2_t cvt_pk_fp16_f32_wmma(float a, float b)
 {
-    fp16x2_t result;
-    asm volatile("v_cvt_pk_f16_f32 %[result], %[a], %[b]"
-                 : [result] "=v"(result)
-                 : [a] "v"(a), [b] "v"(b));
-    return result;
+    // Hardware accelerated packed fp32->fp16 conversion (RTZ)
+    // bit_cast between __fp16 and _Float16 vector types (same underlying representation)
+    return ck_tile::bit_cast<fp16x2_t>(__builtin_amdgcn_cvt_pkrtz(a, b));
 }
 
-CK_TILE_DEVICE bf16x2_t cvt_pk_bf16_f32(float a, float b)
+CK_TILE_DEVICE bf16x2_t cvt_pk_bf16_f32_wmma(float a, float b)
 {
-    bf16x2_t result;
-    asm volatile("v_cvt_pk_bf16_f32 %[result], %[a], %[b]"
-                 : [result] "=v"(result)
-                 : [a] "v"(a), [b] "v"(b));
-    return result;
+    // No bf16 packed builtin, use CK scalar conversion
+    return ck_tile::fp32x2_to_bf16x2(fp32x2_t{a, b});
 }
 
-CK_TILE_DEVICE fp32x2_t pk_mul_f32(fp32x2_t lhs, fp32x2_t rhs)
+CK_TILE_DEVICE fp32x2_t pk_mul_f32_wmma(fp32x2_t lhs, fp32x2_t rhs)
 {
+    // RDNA has no packed f32 multiply, use scalar operations
     fp32x2_t result;
-    asm volatile("v_pk_mul_f32 %[result], %[lhs], %[rhs]"
-                 : [result] "=v"(result)
-                 : [lhs] "v"(lhs), [rhs] "v"(rhs));
+    result.x = lhs.x * rhs.x;
+    result.y = lhs.y * rhs.y;
     return result;
 }
 } // namespace detail
 
-/// NOTICE: This pipeline is a work in progress and is awaiting upcoming compiler fixes and
-/// instruction scheduling optimizations.
-template <typename Problem_, typename Policy_ = BlockFmhaV3PipelineDefaultPolicy>
-struct BlockFmhaFwdV3Pipeline
+/// WMMA v3 Pipeline for gfx11/gfx12 (RDNA3/RDNA4)
+/// This is optimized for WMMA 16x16x16 instructions with wave32.
+template <typename Problem_, typename Policy_ = BlockFmhaV3WmmaPipelinePolicy>
+struct BlockFmhaFwdV3WmmaPipeline
 {
     using Problem             = ck_tile::remove_cvref_t<Problem_>;
     using Policy              = ck_tile::remove_cvref_t<Policy_>;
@@ -284,7 +278,9 @@ struct BlockFmhaFwdV3Pipeline
     using VLayout = remove_cvref_t<typename BlockFmhaShape::VLayout>;
     static_assert(std::is_same_v<VLayout, ck_tile::tensor_layout::gemm::RowMajor>);
 
-    static constexpr ck_tile::index_t kBlockSize = Problem::kBlockSize;
+    // WMMA uses wave32, hardcode kBlockSize to avoid host-side get_warp_size() returning 64
+    // NumWarps * 32 (wave32) instead of NumWarps * get_warp_size()
+    static constexpr ck_tile::index_t kBlockSize = BlockFmhaShape::NumWarps * 32;
 
     static constexpr ck_tile::index_t kM0           = BlockFmhaShape::kM0;
     static constexpr ck_tile::index_t kN0           = BlockFmhaShape::kN0;
@@ -518,20 +514,15 @@ struct BlockFmhaFwdV3Pipeline
         decltype(make_static_distributed_tensor<QDataType>(
             Policy::template MakeQRegTileDistribution<Problem>())) q_tile;
 
+        // WMMA: Use regular load for both K and V tiles
+        // WMMA 16x16x16 has symmetric A/B distribution (kAMLane == kBNLane == 16)
         union kv_tile_type
         {
             CK_TILE_DEVICE kv_tile_type() {}
 
             decltype(load_tile(k_lds_window_load(number<0>{}))) k_tile;
-
-#if defined(__gfx11__) || defined(__gfx12__)
-            // Wave32: Use regular load - V data already in correct layout
-            // WMMA 16x16x16 has symmetric A/B distribution (kAMLane == kBNLane == 16)
+            // WMMA: Use regular load instead of load_tile_transpose
             decltype(load_tile(v_lds_window_load(number<0>{}))) v_tile;
-#else
-            // Wave64: Use transpose load for optimal performance
-            decltype(load_tile_transpose(v_lds_window_load(number<0>{}))) v_tile;
-#endif
         } kv_tile;
 
         union sp_compute_type
@@ -570,6 +561,33 @@ struct BlockFmhaFwdV3Pipeline
                                      Policy::template MakeVLdsLoadBlockDescriptor<Problem>()),
                                  Policy::template MakeVRegTileDistribution<Problem>());
         });
+
+        // P tile LDS redistribution: GEMM0 C distribution -> GEMM1 A distribution
+        // This is needed because GEMM0 C splits N across warps, but GEMM1 needs full K per warp
+        constexpr index_t p_lds_offset = 4 * Policy::template GetSmemSizeKV<Problem>();
+        // Store window uses GEMM0 C distribution (matching sp.p)
+        auto p_lds_store_window = make_tile_window(
+            make_lds_tile_window<PDataType>(
+                static_cast<char*>(smem_ptr) + p_lds_offset,
+                Policy::template MakePLdsStoreBlockDescriptor<Problem>()),
+            Policy::template MakePRegTileDistributionForStore<Problem>());
+
+        auto p_lds_load_window = make_tile_window(
+            make_lds_tile_window<PDataType>(
+                static_cast<char*>(smem_ptr) + p_lds_offset,
+                Policy::template MakePLdsLoadBlockDescriptor<Problem>()),
+            Policy::template MakePRegTileDistributionForGemm1<Problem>());
+
+        // p_tile_for_gemm1: independent tile with GEMM1 A distribution (16 elements per thread)
+        // This is separate from the union (sp.p has 8 elements with GEMM0 C distribution)
+        auto p_tile_for_gemm1 = make_static_distributed_tensor<PDataType>(
+            Policy::template MakePRegTileDistributionForGemm1<Problem>());
+
+        // Cross-warp reduction LDS for rowsum_p and m
+        // Needed because block_tile_reduce_sync only reduces within a warp, not across warps
+        constexpr index_t reduce_lds_offset = 4 * Policy::template GetSmemSizeKV<Problem>() 
+                                            + Policy::template GetPLdsSize<Problem>();
+        float* reduce_lds = reinterpret_cast<float*>(static_cast<char*>(smem_ptr) + reduce_lds_offset);
 
         {
             auto origin_q      = load_tile(q_dram_window);
@@ -617,10 +635,15 @@ struct BlockFmhaFwdV3Pipeline
                              Policy::template MakeKDramTileDistribution<Problem>());
         k_dram_window.init_raw();
 
+        // Get the original hdim offset from the input V window (for hdim slicing support)
+        // WMMA v3 (bn1=32, hdim_v=128) needs 4 tiles, each with different hdim offset
+        const auto v_origin = v_dram_block_window_tmp.get_window_origin();
+        const index_t v_hdim_offset = v_origin.at(number<1>{}); // hdim offset (i_n1 * kN1)
+
         auto v_dram_window =
             make_tile_window(v_dram_block_window_tmp.get_bottom_tensor_view(),
                              v_dram_block_window_tmp.get_window_lengths(),
-                             {seqlen_k_start, 0}, // TODO: hdim split?
+                             {seqlen_k_start, v_hdim_offset},
                              Policy::template MakeVDramTileDistribution<Problem>());
         v_dram_window.init_raw();
 
@@ -636,7 +659,7 @@ struct BlockFmhaFwdV3Pipeline
         static_assert(NumWarpGroups == 2);
 
         [[maybe_unused]] auto print_dist_tensor = [&](const auto& dist_tensor, const char* name) {
-            printf("[POYENC] %s (size=%d): %5.2f",
+            printf("[WMMA] %s (size=%d): %5.2f",
                    name,
                    decltype(dist_tensor.thread_buf_)::size(),
                    ck_tile::type_convert<float>(dist_tensor.thread_buf_[0]));
@@ -713,13 +736,10 @@ struct BlockFmhaFwdV3Pipeline
         constexpr int K_mem_su_ld_insts = k_dram_window.get_num_of_access();
         constexpr int V_mem_su_ld_insts = v_dram_window.get_num_of_access();
 
+        // WMMA: Use synchronous load + store instead of async_load_tile_raw
         auto K_mem_load = [&](auto k_lds_write_idx) {
-#if defined(__gfx11__) || defined(__gfx12__)
             auto k_tile_tmp = load_tile(k_dram_window);
             store_tile(k_lds_window_store(k_lds_write_idx), k_tile_tmp);
-#else
-            async_load_tile_raw(k_lds_window_store(k_lds_write_idx), k_dram_window);
-#endif
 
             /// FIXME: use the future-predicting method to move the window
             // move K tile windows
@@ -730,26 +750,18 @@ struct BlockFmhaFwdV3Pipeline
             kv_tile.k_tile = load_tile(k_lds_window_load(k_lds_read_idx));
         };
 
+        // WMMA: Use synchronous load + store instead of async_load_tile_raw
         auto V_mem_load = [&](auto v_lds_write_idx) {
-#if defined(__gfx11__) || defined(__gfx12__)
             auto v_tile_tmp = load_tile(v_dram_window);
             store_tile(v_lds_window_store(v_lds_write_idx), v_tile_tmp);
-#else
-            async_load_tile_raw(v_lds_window_store(v_lds_write_idx), v_dram_window);
-#endif
 
             /// FIXME: use the future-predicting method to move the window
             move_tile_window(v_dram_window, {kK1, 0});
         };
 
+        // WMMA: Use regular load (no transpose needed due to symmetric A/B distribution)
         auto V_lds_load = [&](auto v_lds_read_idx) {
-#if defined(__gfx11__) || defined(__gfx12__)
-            // Wave32: Use regular load (WMMA has symmetric A/B distribution)
             kv_tile.v_tile = load_tile(v_lds_window_load(v_lds_read_idx));
-#else
-            // Wave64: Use transpose load
-            kv_tile.v_tile = load_tile_transpose(v_lds_window_load(v_lds_read_idx));
-#endif
         };
 
         decltype(m) m_old;
@@ -779,21 +791,39 @@ struct BlockFmhaFwdV3Pipeline
                           "assuming that each thread holds 1 rowmax value");
             auto m_latest = block_tile_reduce<SMPLComputeDataType>(
                 sp(sp_reg_idx).sp_compute, sequence<1>{}, f_max, m.thread_buf_[0]);
-#if defined(__gfx950__)
-            // assuming that we are using 32x32 mfma
-            int32x2_t swapped_regs =
-                __builtin_amdgcn_permlane32_swap(bit_cast<int32_t>(m_latest.thread_buf_[0]),
-                                                 bit_cast<int32_t>(m_latest.thread_buf_[0]),
-                                                 false,
-                                                 false);
-            /// TODO: eliminate 2 redudant v_max_f32 instructions generated by the compiler
-            m_latest.thread_buf_[0] = f_max(bit_cast<SMPLComputeDataType>(swapped_regs.x),
-                                            bit_cast<SMPLComputeDataType>(swapped_regs.y));
-#else
+            // WMMA: Use block_tile_reduce_sync instead of permlane32_swap
             block_tile_reduce_sync(m_latest, f_max, bool_constant<false>{});
-#endif
+            
+            // Cross-warp reduction for m_latest via LDS (max reduction)
+            // block_tile_reduce_sync only reduces within a warp, we need to reduce across N-warps
+            // Only reduce within the same M-warp group (NWarp warps per group)
+            {
+                constexpr index_t NWarp = Problem::BlockFmhaShape::Gemm0BlockWarps::at(number<1>{});
+                const index_t warp_id = threadIdx.x / 32;
+                const index_t lane_id = threadIdx.x % 32;
+                const index_t m_warp_id = warp_id / NWarp;  // Which M-warp group (0, 1, 2, 3)
+                
+                // Lane 0 of each warp stores to LDS[warp_id]
+                if (lane_id == 0) {
+                    reduce_lds[warp_id] = m_latest.thread_buf_[0];
+                }
+                __syncthreads();
+                
+                // Each warp's lane 0 reduces its M-warp group
+                if (lane_id == 0) {
+                    float max_val = reduce_lds[m_warp_id * NWarp];
+                    for (index_t n = 1; n < NWarp; ++n) {
+                        max_val = f_max(max_val, reduce_lds[m_warp_id * NWarp + n]);
+                    }
+                    reduce_lds[m_warp_id * NWarp] = max_val;
+                }
+                __syncthreads();
+                
+                // All threads read their M-warp's reduced value
+                m_latest.thread_buf_[0] = reduce_lds[m_warp_id * NWarp];
+            }
+            
             m = m_latest;
-
             constexpr auto p_spans =
                 std::decay_t<decltype(sp(sp_reg_idx).sp_compute)>::get_distributed_spans();
             sweep_tile_span(p_spans[number<0>{}], [&](auto idx0) {
@@ -806,7 +836,7 @@ struct BlockFmhaFwdV3Pipeline
                     }
                     else
                     {
-                        sp_delta(sp_reg_idx)(i_j_idx) = detail::fma_impl_vsv(
+                        sp_delta(sp_reg_idx)(i_j_idx) = detail::fma_impl_vsv_wmma(
                             sp(sp_reg_idx).sp_compute(i_j_idx), scale_s, -scale_s * m(i_j_idx));
                     }
                 });
@@ -832,18 +862,38 @@ struct BlockFmhaFwdV3Pipeline
                 SMPLComputeDataType{0}); // rowsum(Pcompute{j})
             static_assert(rowsum_p.thread_buf_.size() == 1,
                           "assuming that each thread holds 1 rowsum value");
-#if defined(__gfx950__)
-            // assuming that we are using 32x32 mfma
-            int32x2_t swapped_regs =
-                __builtin_amdgcn_permlane32_swap(bit_cast<int32_t>(rowsum_p.thread_buf_[0]),
-                                                 bit_cast<int32_t>(rowsum_p.thread_buf_[0]),
-                                                 false,
-                                                 false);
-            rowsum_p.thread_buf_[0] = f_sum(bit_cast<SMPLComputeDataType>(swapped_regs.x),
-                                            bit_cast<SMPLComputeDataType>(swapped_regs.y));
-#else
+            
+            // WMMA: Use block_tile_reduce_sync instead of permlane32_swap
             block_tile_reduce_sync(rowsum_p, f_sum, bool_constant<false>{});
-#endif
+            
+            // Cross-warp reduction for rowsum_p via LDS
+            // block_tile_reduce_sync only reduces within a warp, we need to reduce across N-warps
+            // Only reduce within the same M-warp group (NWarp warps per group)
+            {
+                constexpr index_t NWarp = Problem::BlockFmhaShape::Gemm0BlockWarps::at(number<1>{});
+                const index_t warp_id = threadIdx.x / 32;
+                const index_t lane_id = threadIdx.x % 32;
+                const index_t m_warp_id = warp_id / NWarp;  // Which M-warp group (0, 1, 2, 3)
+                
+                // Lane 0 of each warp stores to LDS[warp_id]
+                if (lane_id == 0) {
+                    reduce_lds[warp_id] = rowsum_p.thread_buf_[0];
+                }
+                __syncthreads();
+                
+                // Each warp's lane 0 reduces its M-warp group
+                if (lane_id == 0) {
+                    float total = 0.f;
+                    for (index_t n = 0; n < NWarp; ++n) {
+                        total += reduce_lds[m_warp_id * NWarp + n];
+                    }
+                    reduce_lds[m_warp_id * NWarp] = total;
+                }
+                __syncthreads();
+                
+                // All threads read their M-warp's reduced value
+                rowsum_p.thread_buf_[0] = reduce_lds[m_warp_id * NWarp];
+            }
 
             // l{j}
             /// Note: The compiler keeps moving the following instructions elsewhere because 'l'
@@ -863,12 +913,12 @@ struct BlockFmhaFwdV3Pipeline
                         return ck_tile::exp2(scale_s * (m_old[i_idx] - m[i_idx]));
                     }
                 }();
-                l(i_idx) = detail::add_impl_vv(tmp * l[i_idx], rowsum_p[i_idx]);
+                l(i_idx) = detail::add_impl_vv_wmma(tmp * l[i_idx], rowsum_p[i_idx]);
             });
 
             // update partial o_acc [0, fmha_alu_D_reg_cnt)
             static_for<0, fmha_alu_D_reg_cnt, 1>{}([&](auto idx) {
-                o_acc.thread_buf_[idx] = detail::mul_impl_vv(o_acc.thread_buf_[idx], o_acc_scale);
+                o_acc.thread_buf_[idx] = detail::mul_impl_vv_wmma(o_acc.thread_buf_[idx], o_acc_scale);
             });
 
             /// Note: The compiler keeps sinking the conversion instructions because the
@@ -881,13 +931,13 @@ struct BlockFmhaFwdV3Pipeline
                 float y = p_compute_element_func(sp(sp_reg_idx).sp_compute.thread_buf_[idx + 1]);
                 if constexpr(std::is_same_v<PDataType, fp16_t>)
                 {
-                    auto casted                           = detail::cvt_pk_fp16_f32(x, y);
+                    auto casted                           = detail::cvt_pk_fp16_f32_wmma(x, y);
                     sp(sp_reg_idx).p.thread_buf_[idx]     = casted.x;
                     sp(sp_reg_idx).p.thread_buf_[idx + 1] = casted.y;
                 }
                 else
                 {
-                    auto casted                           = detail::cvt_pk_bf16_f32(x, y);
+                    auto casted                           = detail::cvt_pk_bf16_f32_wmma(x, y);
                     sp(sp_reg_idx).p.thread_buf_[idx]     = casted.x;
                     sp(sp_reg_idx).p.thread_buf_[idx + 1] = casted.y;
                 }
@@ -902,23 +952,21 @@ struct BlockFmhaFwdV3Pipeline
             if constexpr(gemm_idx == 0)
             {
                 clear_tile(sp(sp_reg_idx).sp_compute); // initialize C
-                gemm_0(sp(sp_reg_idx).sp_compute,
-                       get_slice_tile(q_tile,
-                                      sequence<0, (k0_loops - 1) * kK0>{},
-                                      sequence<kM0, k0_loops * kK0>{}),
-                       get_slice_tile(kv_tile.k_tile,
-                                      sequence<0, (k0_loops - 1) * kK0>{},
-                                      sequence<kN0, k0_loops * kK0>{}));
+                // Note: Since k0_loops == 1 (v3 constraint), slice is full tile access
+                // Removed get_slice_tile to avoid tile distribution incompatibility with WMMA
+                gemm_0(sp(sp_reg_idx).sp_compute, q_tile, kv_tile.k_tile);
             }
             else
             {
-                gemm_1(o_acc,
-                       get_slice_tile(sp(sp_reg_idx).p,
-                                      sequence<0, (k1_loops - 1) * kK1>{},
-                                      sequence<kM0, k1_loops * kK1>{}),
-                       get_slice_tile(kv_tile.v_tile,
-                                      sequence<0, (k1_loops - 1) * kK1>{},
-                                      sequence<kN1, k1_loops * kK1>{}));
+                // P tile LDS redistribution: GEMM0 C -> GEMM1 A
+                // Required because GEMM0 C splits N across warps, but GEMM1 needs full K per warp
+                store_tile(p_lds_store_window, sp(sp_reg_idx).p);  // Store with GEMM0 C distribution
+                
+                block_sync_lds();
+                p_tile_for_gemm1 = load_tile(p_lds_load_window);   // Load with GEMM1 A distribution
+                
+                // Use redistributed P tile for GEMM1
+                gemm_1(o_acc, p_tile_for_gemm1, kv_tile.v_tile);
             }
         };
 
@@ -926,23 +974,20 @@ struct BlockFmhaFwdV3Pipeline
             if constexpr(gemm_idx == 0)
             {
                 clear_tile(sp(sp_reg_idx).sp_compute); // initialize C
-                gemm_0(sp(sp_reg_idx).sp_compute,
-                       get_slice_tile(q_tile,
-                                      sequence<0, (k0_loops - 1) * kK0>{},
-                                      sequence<kM0, k0_loops * kK0>{}),
-                       get_slice_tile(kv_tile.k_tile,
-                                      sequence<0, (k0_loops - 1) * kK0>{},
-                                      sequence<kN0, k0_loops * kK0>{}));
+                // Note: Since k0_loops == 1 (v3 constraint), slice is full tile access
+                // Removed get_slice_tile to avoid tile distribution incompatibility with WMMA
+                gemm_0(sp(sp_reg_idx).sp_compute, q_tile, kv_tile.k_tile);
             }
             else
             {
-                gemm_1(o_acc,
-                       get_slice_tile(sp(sp_reg_idx).p,
-                                      sequence<0, (k1_loops - 1) * kK1>{},
-                                      sequence<kM0, k1_loops * kK1>{}),
-                       get_slice_tile(kv_tile.v_tile,
-                                      sequence<0, (k1_loops - 1) * kK1>{},
-                                      sequence<kN1, k1_loops * kK1>{}));
+                // P tile LDS redistribution: GEMM0 C -> GEMM1 A
+                store_tile(p_lds_store_window, sp(sp_reg_idx).p);
+                block_sync_lds();
+                p_tile_for_gemm1 = load_tile(p_lds_load_window);
+                
+                // Use redistributed P tile for GEMM1
+                gemm_1(o_acc, p_tile_for_gemm1, kv_tile.v_tile);
+
                 fmha_alu0(number<1>{} - sp_reg_idx);
             }
         };
@@ -980,12 +1025,13 @@ struct BlockFmhaFwdV3Pipeline
             /// NOTICE: Use inline asm v_pk_mul_f32 to reduce latency. The fmha_alu_D_upd() call
             /// should be placed at the end of a phase.
             // update partial o_acc after [issued_D_reg_cnt]
+
             static_for<issued_D_reg_cnt, o_acc.thread_buf_.size(), 2>{}([&](auto idx) {
                 fp32x2_t input;
                 input.x = o_acc.thread_buf_[idx];
                 input.y = o_acc.thread_buf_[idx + 1];
 
-                auto output = detail::pk_mul_f32(input, pk_o_acc_scale);
+                auto output = detail::pk_mul_f32_wmma(input, pk_o_acc_scale);
 
                 o_acc.thread_buf_[idx]     = output.x;
                 o_acc.thread_buf_[idx + 1] = output.y;
@@ -1036,11 +1082,12 @@ struct BlockFmhaFwdV3Pipeline
             auto memV = number<0>{};
             auto memK = number<1>{};
 
-            using Scheduler = CoreLoopScheduler<Problem, FmhaMask::IsMasking>;
+            // Use WMMA-specific scheduler
+            using Scheduler = CoreLoopSchedulerWmma<Problem, FmhaMask::IsMasking>;
 
             auto iteration = [&](auto pi) {
-                auto xdl_SP_p01_reg_idx = number<1>{} - pi;
-                auto xdl_SP_p23_reg_idx = pi;
+                auto sp_p01_reg_idx = number<1>{} - pi;
+                auto sp_p23_reg_idx = pi;
 
                 auto K_w0_lds_wr_idx = number<1>{} - pi;
                 auto V_w0_lds_wr_idx = pi;
@@ -1056,7 +1103,7 @@ struct BlockFmhaFwdV3Pipeline
 
                 if constexpr(cl_p == 0)
                 {
-#if ADD_SBARRIER_FOR_PHASE0
+#if ADD_SBARRIER_FOR_PHASE0_WMMA
                     __builtin_amdgcn_sched_barrier(0);
                     __builtin_amdgcn_s_barrier();
 #endif
@@ -1064,40 +1111,40 @@ struct BlockFmhaFwdV3Pipeline
                     // phase0
                     if constexpr(pi == 0)
                     {
-                        ASM_MARKER("phase0 Wave0-3 (pi=0)");
+                        ASM_MARKER_WMMA("phase0 Wave0-3 (pi=0)");
                     }
                     else
                     {
-                        ASM_MARKER("phase0 Wave0-3 (pi=1)");
+                        ASM_MARKER_WMMA("phase0 Wave0-3 (pi=1)");
                     }
                     s_waitcnt_lgkmcnt<0>();
                     __builtin_amdgcn_sched_barrier(0);
-                    cl_calc(xdl_SP_p01_reg_idx, gemm0);
-                    fmha_alu1(xdl_SP_p23_reg_idx);
-                    fmha_logits_trans(xdl_SP_p01_reg_idx);
+                    cl_calc(sp_p01_reg_idx, gemm0);
+                    fmha_alu1(sp_p23_reg_idx);
+                    fmha_logits_trans(sp_p01_reg_idx);
 
                     Scheduler::schedule(cl_p, number<0>{});
                     __builtin_amdgcn_sched_barrier(0);
                     // phase1
-                    ASM_MARKER("phase1 Wave0-3");
+                    ASM_MARKER_WMMA("phase1 Wave0-3");
                     s_waitcnt_vmcnt<K_mem_su_ld_insts + V_mem_su_ld_insts>();
                     __builtin_amdgcn_sched_barrier(0);
                     __builtin_amdgcn_s_barrier();
                     __builtin_amdgcn_sched_barrier(0);
                     cl_load(memK, K_w0_lds_wr_idx, V_w0_lds_rd_idx);
                     Scheduler::schedule(cl_p, number<1>{});
-                    fmha_mask(xdl_SP_p01_reg_idx);
+                    fmha_mask(sp_p01_reg_idx);
 
                     __builtin_amdgcn_sched_barrier(0);
                     // phase2
-                    ASM_MARKER("phase2 Wave0-3");
+                    ASM_MARKER_WMMA("phase2 Wave0-3");
                     s_waitcnt_lgkmcnt<0>();
                     __builtin_amdgcn_sched_barrier(0);
                     __builtin_amdgcn_s_barrier();
                     __builtin_amdgcn_sched_barrier(0);
                     asm volatile("s_nop 0");
                     __builtin_amdgcn_sched_barrier(0);
-                    cl_calc(xdl_SP_p23_reg_idx, gemm1);
+                    cl_calc(sp_p23_reg_idx, gemm1);
 
                     Scheduler::schedule(cl_p, number<2>{});
                     __builtin_amdgcn_sched_barrier(0);
@@ -1105,7 +1152,7 @@ struct BlockFmhaFwdV3Pipeline
 
                     __builtin_amdgcn_sched_barrier(0);
                     // phase3
-                    ASM_MARKER("phase3 Wave0-3");
+                    ASM_MARKER_WMMA("phase3 Wave0-3");
                     s_waitcnt_vmcnt<K_mem_su_ld_insts + V_mem_su_ld_insts>();
                     __builtin_amdgcn_sched_barrier(0);
                     __builtin_amdgcn_s_barrier();
@@ -1121,7 +1168,7 @@ struct BlockFmhaFwdV3Pipeline
                 }
                 else
                 {
-#if ADD_SBARRIER_FOR_PHASE0
+#if ADD_SBARRIER_FOR_PHASE0_WMMA
                     __builtin_amdgcn_sched_barrier(0);
                     __builtin_amdgcn_s_barrier();
 #endif
@@ -1129,37 +1176,37 @@ struct BlockFmhaFwdV3Pipeline
                     // phase0
                     if constexpr(pi == 0)
                     {
-                        ASM_MARKER("phase0 Wave4-7 (pi=0)");
+                        ASM_MARKER_WMMA("phase0 Wave4-7 (pi=0)");
                     }
                     else
                     {
-                        ASM_MARKER("phase0 Wave4-7 (pi=1)");
+                        ASM_MARKER_WMMA("phase0 Wave4-7 (pi=1)");
                     }
                     cl_load(memV, V_w4_lds_wr_idx, K_w4_lds_rd_idx);
 
                     Scheduler::schedule(cl_p, number<0>{});
                     __builtin_amdgcn_sched_barrier(0);
                     // phase1
-                    ASM_MARKER("phase1 Wave4-7");
+                    ASM_MARKER_WMMA("phase1 Wave4-7");
                     s_waitcnt<K_mem_su_ld_insts + V_mem_su_ld_insts, 0>();
                     __builtin_amdgcn_sched_barrier(0);
                     __builtin_amdgcn_s_barrier();
                     __builtin_amdgcn_sched_barrier(0);
                     asm volatile("s_nop 1");
                     __builtin_amdgcn_sched_barrier(0);
-                    cl_calc(xdl_SP_p01_reg_idx, gemm0);
-                    fmha_alu1(xdl_SP_p23_reg_idx);
-                    fmha_logits_trans(xdl_SP_p01_reg_idx);
+                    cl_calc(sp_p01_reg_idx, gemm0);
+                    fmha_alu1(sp_p23_reg_idx);
+                    fmha_logits_trans(sp_p01_reg_idx);
 
                     Scheduler::schedule(cl_p, number<1>{});
                     __builtin_amdgcn_sched_barrier(0);
                     // phase2
-                    ASM_MARKER("phase2 Wave4-7");
+                    ASM_MARKER_WMMA("phase2 Wave4-7");
                     __builtin_amdgcn_s_barrier();
                     __builtin_amdgcn_sched_barrier(0);
                     cl_load(memK, K_w4_lds_wr_idx, V_w4_lds_rd_idx);
                     Scheduler::schedule(cl_p, number<2>{});
-                    fmha_mask(xdl_SP_p01_reg_idx);
+                    fmha_mask(sp_p01_reg_idx);
 
                     kv_token_start += kN0;
                     if(num_total_loop <= ++i_total_loops)
@@ -1169,14 +1216,14 @@ struct BlockFmhaFwdV3Pipeline
 
                     __builtin_amdgcn_sched_barrier(0);
                     // phase3
-                    ASM_MARKER("phase3 Wave4-7");
+                    ASM_MARKER_WMMA("phase3 Wave4-7");
                     s_waitcnt<K_mem_su_ld_insts + V_mem_su_ld_insts, 0>();
                     __builtin_amdgcn_sched_barrier(0);
                     __builtin_amdgcn_s_barrier();
                     __builtin_amdgcn_sched_barrier(0);
                     asm volatile("s_nop 1");
                     __builtin_amdgcn_sched_barrier(0);
-                    cl_calc(xdl_SP_p23_reg_idx, gemm1);
+                    cl_calc(sp_p23_reg_idx, gemm1);
 
                     Scheduler::schedule(cl_p, number<3>{});
                     __builtin_amdgcn_sched_barrier(0);
@@ -1206,13 +1253,13 @@ struct BlockFmhaFwdV3Pipeline
 
             s_waitcnt_lgkmcnt<0>();
 
-            auto xdl_SP_p23_reg_idx = ps_pi;
-            gemm(xdl_SP_p23_reg_idx, /*gemm_idx=*/number<1>{});
+            auto sp_p23_reg_idx = ps_pi;
+            gemm(sp_p23_reg_idx, /*gemm_idx=*/number<1>{});
         };
 
         // pre-stage
         {
-            ASM_MARKER("before pre-stage");
+            ASM_MARKER_WMMA("before pre-stage");
             // (1) load K0 to LDS & VGPR
             K_mem_load(number<0>{}); // mem_K0
 
@@ -1231,7 +1278,7 @@ struct BlockFmhaFwdV3Pipeline
             }
             V_mem_load(number<0>{}); // mem_V0
 
-            // (3) mfma (Q*K0) + softmax
+            // (3) wmma (Q*K0) + softmax
             gemm(number<0>{}, /*gemm_idx=*/number<0>{});
             fmha_logits_trans(number<0>{});
             fmha_mask(number<0>{});
@@ -1243,7 +1290,7 @@ struct BlockFmhaFwdV3Pipeline
             ++i_total_loops;
             if(num_total_loop <= i_total_loops)
             {
-                goto label_main_loops_exit;
+                goto label_main_loops_exit_wmma;
             }
 
             if(2 < num_total_loop)
@@ -1254,7 +1301,7 @@ struct BlockFmhaFwdV3Pipeline
                 __builtin_amdgcn_s_barrier();
             }
 
-            ASM_MARKER("end pre-stage");
+            ASM_MARKER_WMMA("end pre-stage");
         }
 
         if(1 < num_total_loop)
@@ -1277,7 +1324,7 @@ struct BlockFmhaFwdV3Pipeline
                     ;
             }
         }
-    label_main_loops_exit:
+    label_main_loops_exit_wmma:
         if(num_total_loop % 2)
         {
             fmha_post_process(number<1>{});
@@ -1365,3 +1412,4 @@ struct BlockFmhaFwdV3Pipeline
 };
 
 } // namespace ck_tile
+

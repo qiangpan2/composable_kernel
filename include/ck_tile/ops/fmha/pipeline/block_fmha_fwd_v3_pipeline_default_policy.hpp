@@ -8,6 +8,7 @@
 #include "ck_tile/ops/gemm/block/block_gemm_areg_breg_creg_v2_custom_policy.hpp"
 #include "ck_tile/ops/gemm/block/block_gemm_problem.hpp"
 #include "ck_tile/ops/gemm/pipeline/tile_gemm_shape.hpp"
+#include "ck_tile/ops/gemm/warp/warp_gemm_dispatcher.hpp"
 
 namespace ck_tile {
 
@@ -190,7 +191,14 @@ struct BlockFmhaV3PipelineDefaultPolicy
     {
         using namespace ck_tile;
 
-        using BlockGemm       = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
+        using BlockGemm = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
+
+#if defined(__gfx11__) || defined(__gfx12__)
+        // Wave32: Use A-side distribution encoding directly to bypass transpose constraint
+        // The transpose ValidationTraits fails for wave32 due to different lane distribution
+        return make_static_tile_distribution(BlockGemm::MakeABlockDistributionEncode());
+#else
+        // Wave64: Define variables only in this branch to avoid unused variable warnings
         constexpr auto config = BlockGemm::Policy::template GetWarpGemmMWarpNWarp<Problem>();
         using WarpGemm        = remove_cvref_t<decltype(config.template at<0>())>;
 
@@ -221,6 +229,7 @@ struct BlockFmhaV3PipelineDefaultPolicy
                                           typename Problem::VDataType>::TransposedDstrEncode{});
 
         return v_block_dstr;
+#endif
     }
 
     template <typename Problem>
@@ -240,6 +249,17 @@ struct BlockFmhaV3PipelineDefaultPolicy
                                            typename Problem::BlockFmhaShape::Gemm0WarpTile>>;
 
         constexpr auto warp_gemm = []() {
+#if defined(__gfx11__) || defined(__gfx12__)
+            // WMMA path: use WarpGemmDispatcher to auto-select WMMA 16x16x16
+            return WarpGemmDispatcher<typename Problem::QDataType,
+                                      typename Problem::KDataType,
+                                      typename Problem::SaccDataType,
+                                      Problem::BlockFmhaShape::Gemm0WarpTile::at(number<0>{}),
+                                      Problem::BlockFmhaShape::Gemm0WarpTile::at(number<1>{}),
+                                      Problem::BlockFmhaShape::Gemm0WarpTile::at(number<2>{}),
+                                      true>{};  // TransposeC
+#else
+            // MFMA path: use hardcoded MFMA warp gemm types
             if constexpr(std::is_same_v<typename Problem::QDataType, half_t> &&
                          std::is_same_v<typename Problem::KDataType, half_t> &&
                          std::is_same_v<typename Problem::SaccDataType, float>)
@@ -256,6 +276,7 @@ struct BlockFmhaV3PipelineDefaultPolicy
                 /// WarpGemmMfmaBf16Bf16F32M32N32K16SwizzleBTransposedCDistribution here
                 return WarpGemmMfmaBf16Bf16F32M32N32K16TransposedCDistribution<>{};
             }
+#endif
         }();
 
         using BlockGemmPolicy =
@@ -286,6 +307,7 @@ struct BlockFmhaV3PipelineDefaultPolicy
                                            typename Problem::BlockFmhaShape::Gemm1WarpTile>>;
         /// NOTICE: in order to use load_tile_transpose() later for V tiles, we have to pass
         /// WGAttrNumAccessEnum::Double instead of WGAttrNumAccessEnum::Single
+        /// For gfx11/12 (WMMA), use Single as there's no EDouble specialization for WMMA 16x16x16
         using WarpGemm = WarpGemmDispatcher<typename Problem::PDataType,
                                             typename Problem::VDataType,
                                             typename Problem::OaccDataType,
@@ -295,7 +317,11 @@ struct BlockFmhaV3PipelineDefaultPolicy
                                             true,
                                             false,
                                             false,
+#if defined(__gfx11__) || defined(__gfx12__)
+                                            WGAttrNumAccessEnum::Single>;
+#else
                                             WGAttrNumAccessEnum::Double>;
+#endif
 
         using BlockGemmPolicy =
             BlockGemmARegBRegCRegV2CustomPolicy<typename Problem::PDataType,
@@ -441,6 +467,25 @@ struct BlockFmhaV3PipelineDefaultPolicy
         }();
 
         constexpr index_t SingleVSize = [&]() {
+#if defined(__gfx11__) || defined(__gfx12__)
+            // Wave32: Calculate based on actual MakeVLdsLoadBlockDescriptor layout
+            // The V LDS layout uses NumIssues/NumWarps/Lanes pattern with swapped kN1/kK1
+            using VDataType              = remove_cvref_t<typename Problem::VDataType>;
+            constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1; // Note: swapped in V
+            constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1; // Note: swapped in V
+            constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;
+            constexpr index_t WarpSize   = ck_tile::get_warp_size(); // 32 for wave32
+            constexpr index_t KVector    = GetAlignmentV<Problem>();
+            constexpr index_t kPad = kVLdsPadInBytes / sizeof(VDataType);
+
+            static_assert(WarpSize * KVector >= kKPerBlock && WarpSize * KVector % kKPerBlock == 0);
+            constexpr index_t LanesPerK  = kKPerBlock / KVector;
+            constexpr index_t LaneGroups = WarpSize / LanesPerK;
+            constexpr index_t NumIssues  = kNPerBlock / (LaneGroups * NumWarps);
+
+            return NumIssues * NumWarps * (WarpSize * KVector + kPad);
+#else
+            // Wave64: Original bank-conflict-free layout
             using VDataType                = remove_cvref_t<typename Problem::VDataType>;
             constexpr index_t Banks        = get_n_lds_banks();
             constexpr index_t PixelsPerRow = Banks * 4 / sizeof(VDataType);
@@ -453,6 +498,7 @@ struct BlockFmhaV3PipelineDefaultPolicy
             static_assert(kKPerBlock % kKPack == 0);
 
             return (kKPerBlock / kKPack) * (kNPerBlock / NPerRow) * (PixelsPerRow + kKPack);
+#endif
         }();
 
         return max(SingleKSize, SingleVSize);

@@ -386,28 +386,27 @@ struct FmhaFwdV3Kernel
         return make_tuple(remapped_tg_idx, remapped_tg_idy);
     }
 
-    CK_TILE_DEVICE static constexpr auto GetTileIndex(const Kargs&)
+    CK_TILE_DEVICE static auto GetTileIndex(const Kargs& kargs)
     {
         using namespace ck_tile;
 
-        // const index_t num_tile_n1 = ck_tile::integer_divide_ceil(kargs.hdim_v,
-        // FmhaPipeline::kN1);
+        // Calculate number of tiles in N1 (hdim_v) direction
+        // For MFMA v3 (bn1=128, hdim_v=128): num_tile_n1 = 1
+        // For WMMA v3 (bn1=32, hdim_v=128): num_tile_n1 = 4
+        const index_t num_tile_n1 = integer_divide_ceil(kargs.hdim_v, FmhaPipeline::kN1);
 
-        // assume that num_tile_n1 is always 1
         if constexpr(kIsGroupMode)
         {
             const index_t i_nhead = blockIdx.x;
             const index_t i_batch = blockIdx.y;
             const index_t i_block = blockIdx.z;
 
-            if constexpr(kHasMask)
-            {
-                return ck_tile::make_tuple(gridDim.z - 1 - i_block, 0, i_nhead, i_batch);
-            }
-            else
-            {
-                return ck_tile::make_tuple(i_block, 0, i_nhead, i_batch);
-            }
+            // Decode i_block into (i_tile_m, i_tile_n)
+            const index_t linear_idx = kHasMask ? (gridDim.z - 1 - i_block) : i_block;
+            const index_t i_tile_m = linear_idx / num_tile_n1;
+            const index_t i_tile_n = linear_idx % num_tile_n1;
+
+            return make_tuple(i_tile_m, i_tile_n, i_nhead, i_batch);
         }
         else
         {
@@ -415,14 +414,12 @@ struct FmhaFwdV3Kernel
             const index_t i_block = blockIdx.y;
             const index_t i_batch = blockIdx.z;
 
-            if constexpr(kHasMask)
-            {
-                return ck_tile::make_tuple(gridDim.y - 1 - i_block, 0, i_nhead, i_batch);
-            }
-            else
-            {
-                return ck_tile::make_tuple(i_block, 0, i_nhead, i_batch);
-            }
+            // Decode i_block into (i_tile_m, i_tile_n)
+            const index_t linear_idx = kHasMask ? (gridDim.y - 1 - i_block) : i_block;
+            const index_t i_tile_m = linear_idx / num_tile_n1;
+            const index_t i_tile_n = linear_idx % num_tile_n1;
+
+            return make_tuple(i_tile_m, i_tile_n, i_nhead, i_batch);
         }
     }
 

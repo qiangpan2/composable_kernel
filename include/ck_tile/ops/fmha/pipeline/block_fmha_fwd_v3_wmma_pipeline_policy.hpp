@@ -1,0 +1,557 @@
+// Copyright (c) Advanced Micro Devices, Inc., or its affiliates.
+// SPDX-License-Identifier: MIT
+
+#pragma once
+
+#include "ck_tile/core.hpp"
+#include "ck_tile/ops/gemm/block/block_gemm_areg_breg_creg_v2.hpp"
+#include "ck_tile/ops/gemm/block/block_gemm_areg_breg_creg_v2_fmha_wmma.hpp"
+#include "ck_tile/ops/gemm/block/block_gemm_areg_breg_creg_v2_custom_policy.hpp"
+#include "ck_tile/ops/gemm/block/block_gemm_problem.hpp"
+#include "ck_tile/ops/gemm/pipeline/tile_gemm_shape.hpp"
+#include "ck_tile/ops/gemm/warp/warp_gemm_dispatcher.hpp"
+
+namespace ck_tile {
+
+/// @brief WMMA-specific policy for v3 pipeline on gfx11/gfx12 (wave32)
+///
+/// Key differences from BlockFmhaV3PipelineDefaultPolicy:
+/// - Fixed WarpSize = 32 (wave32)
+/// - Uses KIssues > 1 for K dimension instead of requiring WarpSize*KVector >= kKPerBlock
+/// - Simplified LDS layout for wave32
+struct BlockFmhaV3WmmaPipelinePolicy
+{
+    static constexpr ck_tile::index_t NumWarpPerGroup = 4;
+    // wave32 fixed: 4 warps * 32 threads = 128 threads per warp group
+    static constexpr ck_tile::index_t NumThreadPerWarpGroup = NumWarpPerGroup * 32;
+
+    // ========================================================================
+    // Alignment methods - can be reused from default policy
+    // ========================================================================
+
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr auto GetAlignmentQ()
+    {
+        constexpr index_t MaxVectorSize = 16 / sizeof(typename Problem::QDataType);
+
+        using BlockGemm       = remove_cvref_t<decltype(GetQKBlockGemm<Problem>())>;
+        constexpr auto config = BlockGemm::Policy::template GetWarpGemmMWarpNWarp<Problem>();
+        using WG              = remove_cvref_t<decltype(config.template at<0>())>;
+
+        return min(MaxVectorSize, WG::kK / WG::WarpGemmAttribute::Impl::kABKLane);
+    }
+
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr auto GetAlignmentK()
+    {
+        using namespace ck_tile;
+        using KDataType = remove_cvref_t<typename Problem::KDataType>;
+        // wave32: dword only (4 bytes)
+        constexpr index_t MaxReadSizeInBytes = 4;
+        return MaxReadSizeInBytes / sizeof(KDataType);
+    }
+
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr auto GetAlignmentV()
+    {
+        using namespace ck_tile;
+        using VDataType = remove_cvref_t<typename Problem::VDataType>;
+        // wave32: dword only (4 bytes)
+        constexpr index_t MaxReadSizeInBytes = 4;
+        return MaxReadSizeInBytes / sizeof(VDataType);
+    }
+
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr auto GetAlignmentO()
+    {
+        using BlockGemm       = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
+        constexpr auto config = BlockGemm::Policy::template GetWarpGemmMWarpNWarp<Problem>();
+        using WG              = remove_cvref_t<decltype(config.template at<0>())>;
+
+        return WG::WarpGemmAttribute::Impl::kCM1PerLane;
+    }
+
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr auto GetSmemKPackK()
+    {
+        using namespace ck_tile;
+        using KDataType = remove_cvref_t<typename Problem::KDataType>;
+        return 16 / sizeof(KDataType);
+    }
+
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr auto GetSmemVPackK()
+    {
+        using namespace ck_tile;
+        using VDataType = remove_cvref_t<typename Problem::VDataType>;
+        return 16 / sizeof(VDataType);
+    }
+
+    // ========================================================================
+    // DRAM tile distributions - rewritten for wave32 with KIssues
+    // ========================================================================
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakeKDramTileDistribution()
+    {
+        using namespace ck_tile;
+        using BlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<Problem>())>;
+        // Use BlockGemm B distribution to ensure consistency with LDS load
+        // K is the B matrix in GEMM0 (Q x K^T = S)
+        return make_static_tile_distribution(BlockGemm::MakeBBlockDistributionEncode());
+    }
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakeVDramTileDistribution()
+    {
+        using namespace ck_tile;
+        using BlockGemm = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
+        // Use BlockGemm B distribution to ensure consistency with LDS load
+        // V is the B matrix in GEMM1 (P x V = O)
+        return make_static_tile_distribution(BlockGemm::MakeBBlockDistributionEncode());
+    }
+
+    // ========================================================================
+    // Register tile distributions - reuse BlockGemm encoding (handled by WarpGemmDispatcher)
+    // ========================================================================
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakeQRegTileDistribution()
+    {
+        using namespace ck_tile;
+        using BlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<Problem>())>;
+        return make_static_tile_distribution(BlockGemm::MakeABlockDistributionEncode());
+    }
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakeKRegTileDistribution()
+    {
+        using namespace ck_tile;
+        using BlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<Problem>())>;
+        return make_static_tile_distribution(BlockGemm::MakeBBlockDistributionEncode());
+    }
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakePRegTileDistribution()
+    {
+        using namespace ck_tile;
+        // Return GEMM0 C distribution (same as sp_compute).
+        // This makes the union between sp_compute and sp.p work correctly:
+        // - sp_compute: GEMM0 C output (fp32), has GEMM0 C distribution
+        // - sp.p: softmax output (fp16), now also has GEMM0 C distribution
+        // Both have the same per-thread element count (8 elements), so the union works.
+        //
+        // GEMM1 (BlockGemmARegBRegCRegV2FmhaWmma) is configured to accept GEMM0 C distribution
+        // as its A input via GEMM0CAsGEMM1ADistributionEncoder, so sp.p can be passed
+        // directly to GEMM1 without LDS redistribution.
+        using BlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<Problem>())>;
+        return make_static_tile_distribution(BlockGemm::MakeCBlockDistributionEncode());
+    }
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakeVRegTileDistribution()
+    {
+        using namespace ck_tile;
+        using BlockGemm = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
+        // V is B matrix in GEMM1 (P x V = O), must use B distribution encoding
+        return make_static_tile_distribution(BlockGemm::MakeBBlockDistributionEncode());
+    }
+
+    // ========================================================================
+    // Block GEMM - reuse with WarpGemmDispatcher (auto-selects WMMA for gfx11/12)
+    // ========================================================================
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto GetQKBlockGemm()
+    {
+        using namespace ck_tile;
+
+        using GemmProblem =
+            BlockGemmProblem<typename Problem::QDataType,
+                             typename Problem::KDataType,
+                             typename Problem::SaccDataType,
+                             Problem::kBlockSize,
+                             TileGemmShape<sequence<Problem::BlockFmhaShape::kM0,
+                                                    Problem::BlockFmhaShape::kN0,
+                                                    Problem::BlockFmhaShape::kK0>,
+                                           typename Problem::BlockFmhaShape::Gemm0BlockWarps,
+                                           typename Problem::BlockFmhaShape::Gemm0WarpTile>>;
+
+        // WMMA path: use WarpGemmDispatcher to auto-select WMMA 16x16x16
+        constexpr auto warp_gemm = WarpGemmDispatcher<typename Problem::QDataType,
+                                                      typename Problem::KDataType,
+                                                      typename Problem::SaccDataType,
+                                                      Problem::BlockFmhaShape::Gemm0WarpTile::at(number<0>{}),
+                                                      Problem::BlockFmhaShape::Gemm0WarpTile::at(number<1>{}),
+                                                      Problem::BlockFmhaShape::Gemm0WarpTile::at(number<2>{}),
+                                                      true>{};  // TransposeC
+
+        using BlockGemmPolicy =
+            BlockGemmARegBRegCRegV2CustomPolicy<typename Problem::QDataType,
+                                                typename Problem::KDataType,
+                                                typename Problem::SaccDataType,
+                                                typename Problem::BlockFmhaShape::Gemm0BlockWarps,
+                                                decltype(warp_gemm),
+                                                GemmLoopOrder::MNK>;
+
+        return BlockGemmARegBRegCRegV2<GemmProblem, BlockGemmPolicy>{};
+    }
+
+    // Nested distribution encoder - returns GEMM0 C distribution for use as GEMM1 A input.
+    // This enables the union trick between sp_compute (GEMM0 C) and sp.p (GEMM1 A)
+    // to work correctly by making both have the same distribution.
+    template <typename FmhaProblem>
+    struct GEMM0CAsGEMM1ADistributionEncoder
+    {
+        template <typename GemmProblem>
+        CK_TILE_DEVICE static constexpr auto Get()
+        {
+            using QKBlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<FmhaProblem>())>;
+            return QKBlockGemm::MakeCBlockDistributionEncode();
+        }
+    };
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto GetPVBlockGemm()
+    {
+        using namespace ck_tile;
+
+        using GemmProblem =
+            BlockGemmProblem<typename Problem::PDataType,
+                             typename Problem::VDataType,
+                             typename Problem::OaccDataType,
+                             Problem::kBlockSize,
+                             TileGemmShape<sequence<Problem::BlockFmhaShape::kM0,
+                                                    Problem::BlockFmhaShape::kN1,
+                                                    Problem::BlockFmhaShape::kK1>,
+                                           typename Problem::BlockFmhaShape::Gemm1BlockWarps,
+                                           typename Problem::BlockFmhaShape::Gemm1WarpTile>>;
+
+        // WMMA path: use Single access (no EDouble specialization for WMMA)
+        using WarpGemm = WarpGemmDispatcher<typename Problem::PDataType,
+                                            typename Problem::VDataType,
+                                            typename Problem::OaccDataType,
+                                            Problem::BlockFmhaShape::Gemm1WarpTile::at(number<0>{}),
+                                            Problem::BlockFmhaShape::Gemm1WarpTile::at(number<1>{}),
+                                            Problem::BlockFmhaShape::Gemm1WarpTile::at(number<2>{}),
+                                            true,
+                                            false,
+                                            false,
+                                            WGAttrNumAccessEnum::Single>;
+
+        using BlockGemmPolicy =
+            BlockGemmARegBRegCRegV2CustomPolicy<typename Problem::PDataType,
+                                                typename Problem::VDataType,
+                                                typename Problem::OaccDataType,
+                                                typename Problem::BlockFmhaShape::Gemm1BlockWarps,
+                                                WarpGemm,
+                                                GemmLoopOrder::MNK>;
+
+        // Use standard BlockGemm for GEMM1.
+        // P tile needs LDS redistribution from GEMM0 C distribution to GEMM1 A distribution
+        // because GEMM0 C splits N across warps, but GEMM1 needs full K per warp.
+        return BlockGemmARegBRegCRegV2<GemmProblem, BlockGemmPolicy>{};
+    }
+
+    // ========================================================================
+    // P tile LDS redistribution - needed because GEMM0 C and GEMM1 A have
+    // incompatible warp-level layouts for K-slicing
+    // ========================================================================
+
+    static constexpr ck_tile::index_t kPLdsPad = 8;  // Avoid bank conflict
+
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetPLdsSize()
+    {
+        // P tile shape: [M, K] = [kM0, kN0] = [64, 32]
+        constexpr ck_tile::index_t M = Problem::BlockFmhaShape::kM0;   // 64
+        constexpr ck_tile::index_t K = Problem::BlockFmhaShape::kN0;   // 32
+        return M * (K + kPLdsPad) * sizeof(typename Problem::PDataType);  // 64 * 40 * 2 = 5120 bytes
+    }
+
+    // Cross-warp reduction LDS size (for rowsum and m reduction across N-warps)
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetReduceLdsSize()
+    {
+        // Need space for each warp to store its local reduction value
+        // 8 warps (256 threads / 32) * sizeof(float) = 32 bytes
+        // Align to 128 bytes for safety
+        return 128;
+    }
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakePLdsStoreBlockDescriptor()
+    {
+        using namespace ck_tile;
+        // Simple 2D layout for P tile LDS: [M, K+pad]
+        // Store uses GEMM0 C distribution - each warp stores its portion
+        constexpr index_t M = Problem::BlockFmhaShape::kM0;   // 64
+        constexpr index_t K = Problem::BlockFmhaShape::kN0;   // 32
+
+        return make_naive_tensor_descriptor_packed(make_tuple(number<M>{}, number<K + kPLdsPad>{}));
+    }
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakePLdsLoadBlockDescriptor()
+    {
+        using namespace ck_tile;
+        // Load uses GEMM1 A distribution - each warp loads full K
+        constexpr index_t M = Problem::BlockFmhaShape::kM0;   // 64
+        constexpr index_t K = Problem::BlockFmhaShape::kN0;   // 32
+
+        return make_naive_tensor_descriptor_packed(make_tuple(number<M>{}, number<K + kPLdsPad>{}));
+    }
+
+    // Distribution for loading P from LDS into GEMM1 A format
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakePRegTileDistributionForGemm1()
+    {
+        using namespace ck_tile;
+        // Return GEMM1 A standard distribution (with KIterPerWarp=2 support)
+        using BlockGemm = remove_cvref_t<decltype(GetPVBlockGemm<Problem>())>;
+        return make_static_tile_distribution(BlockGemm::MakeABlockDistributionEncode());
+    }
+
+    // Distribution for storing P to LDS (matching sp.p which uses GEMM0 C distribution)
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakePRegTileDistributionForStore()
+    {
+        using namespace ck_tile;
+        // Return GEMM0 C distribution (matching sp.p from softmax output)
+        using BlockGemm = remove_cvref_t<decltype(GetQKBlockGemm<Problem>())>;
+        return make_static_tile_distribution(BlockGemm::MakeCBlockDistributionEncode());
+    }
+
+    // ========================================================================
+    // LDS layout - rewritten for wave32 with KIssues
+    // ========================================================================
+
+    static constexpr ck_tile::index_t kKLdsPadInBytes = 4 * 4;   // 4 dwords = 16 bytes
+    static constexpr ck_tile::index_t kVLdsPadInBytes = 4 * 16;  // 16 dwords = 64 bytes
+
+    template <typename Problem, ck_tile::index_t IBuf = 0>
+    CK_TILE_DEVICE static constexpr auto
+    MakeKLdsStoreBlockDescriptor(ck_tile::number<IBuf> = ck_tile::number<0>{})
+    {
+        using namespace ck_tile;
+
+        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32
+        constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kK0;  // 128
+        constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
+        constexpr index_t WarpSize   = 32;
+
+        constexpr index_t KVector = GetAlignmentK<Problem>();  // 2
+        constexpr index_t kPad = kKLdsPadInBytes / sizeof(typename Problem::KDataType);  // 8
+
+        // wave32 layout: multiple K issues
+        constexpr index_t ElementsPerWarpK = WarpSize * KVector;  // 64
+        constexpr index_t KIssues = kKPerBlock / ElementsPerWarpK;  // 2
+        constexpr index_t NPerWarp = kNPerBlock / NumWarps;  // 4
+
+        // LDS layout: [NPerWarp, NumWarps, KIssues, WarpSize, KVector] with padding
+        // Physical layout in LDS (row-major with padding per warp):
+        // Each warp's K slice: WarpSize * KVector + kPad elements
+        constexpr index_t WarpKSliceWithPad = WarpSize * KVector + kPad;  // 72
+
+        constexpr auto k_lds_block_desc_0 = make_naive_tensor_descriptor_with_offset(
+            make_tuple(number<NPerWarp>{},   // n0
+                       number<NumWarps>{},   // n1
+                       number<KIssues>{},    // k0
+                       number<WarpSize>{},   // k1
+                       number<KVector>{}),   // k2
+            make_tuple(number<NumWarps * KIssues * WarpKSliceWithPad>{},
+                       number<KIssues * WarpKSliceWithPad>{},
+                       number<WarpKSliceWithPad>{},
+                       number<KVector>{},
+                       number<1>{}),
+            number<IBuf * GetSingleSmemElementSpaceSize<Problem>()>{},
+            number<KVector>{},
+            number<1>{});
+
+        // Transform to 2D [kNPerBlock, kKPerBlock] format to match DRAM tile distribution
+        // Note: Must output 2D to be compatible with store_tile from 2D DRAM tile
+        constexpr auto k_lds_block_desc_2d = transform_tensor_descriptor(
+            k_lds_block_desc_0,
+            make_tuple(
+                make_merge_transform(make_tuple(number<NPerWarp>{}, number<NumWarps>{})),
+                make_merge_transform(make_tuple(number<KIssues>{}, number<WarpSize>{}, number<KVector>{}))),
+            make_tuple(sequence<0, 1>{}, sequence<2, 3, 4>{}),
+            make_tuple(sequence<0>{}, sequence<1>{}));
+
+        return k_lds_block_desc_2d;
+    }
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakeKLdsLoadBlockDescriptor()
+    {
+        using namespace ck_tile;
+
+        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32
+        constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kK0;  // 128
+        constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
+        constexpr index_t WarpSize   = 32;
+
+        constexpr index_t KPack   = GetSmemKPackK<Problem>();  // 8
+        constexpr index_t KVector = GetAlignmentK<Problem>();  // 2
+        constexpr index_t kPad = kKLdsPadInBytes / sizeof(typename Problem::KDataType);  // 8
+
+        constexpr index_t ElementsPerWarpK = WarpSize * KVector;  // 64
+        constexpr index_t KIssues = kKPerBlock / ElementsPerWarpK;  // 2
+        constexpr index_t NPerWarp = kNPerBlock / NumWarps;  // 4
+        constexpr index_t WarpKSliceWithPad = WarpSize * KVector + kPad;  // 72
+
+        // Load descriptor: reshape to [kNPerBlock, kKPerBlock] logical view
+        constexpr auto k_lds_block_desc_0 = make_naive_tensor_descriptor(
+            make_tuple(number<NPerWarp>{},
+                       number<NumWarps>{},
+                       number<KIssues>{},
+                       number<ElementsPerWarpK / KPack>{},
+                       number<KPack>{}),
+            make_tuple(number<NumWarps * KIssues * WarpKSliceWithPad>{},
+                       number<KIssues * WarpKSliceWithPad>{},
+                       number<WarpKSliceWithPad>{},
+                       number<KPack>{},
+                       number<1>{}),
+            number<KPack>{},
+            number<1>{});
+
+        // Merge to [N, K] logical view
+        constexpr auto k_lds_block_desc = transform_tensor_descriptor(
+            k_lds_block_desc_0,
+            make_tuple(
+                make_merge_transform(make_tuple(number<NPerWarp>{}, number<NumWarps>{})),
+                make_merge_transform(make_tuple(number<KIssues>{}, number<ElementsPerWarpK / KPack>{}, number<KPack>{}))),
+            make_tuple(sequence<0, 1>{}, sequence<2, 3, 4>{}),
+            make_tuple(sequence<0>{}, sequence<1>{}));
+
+        return k_lds_block_desc;
+    }
+
+    template <typename Problem, ck_tile::index_t IBuf = 0>
+    CK_TILE_DEVICE static constexpr auto
+    MakeVLdsStoreBlockDescriptor(ck_tile::number<IBuf> = ck_tile::number<0>{})
+    {
+        using namespace ck_tile;
+        using VDataType = remove_cvref_t<typename Problem::VDataType>;
+
+        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32
+        constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32
+        constexpr index_t kPad = kVLdsPadInBytes / sizeof(VDataType); // 32
+
+        // Simple 2D naive layout: [N, K+pad] - works with any distribution
+        // This layout is compatible with BlockGemm B distribution used for V DRAM load
+        constexpr auto v_lds_block_desc = make_naive_tensor_descriptor_with_offset(
+            make_tuple(number<kNPerBlock>{}, number<kKPerBlock>{}),
+            make_tuple(number<kKPerBlock + kPad>{}, number<1>{}),
+            number<(IBuf + 2) * GetSingleSmemElementSpaceSize<Problem>()>{},
+            number<GetAlignmentV<Problem>()>{},
+            number<1>{});
+
+        return v_lds_block_desc;
+    }
+
+    template <typename Problem>
+    CK_TILE_DEVICE static constexpr auto MakeVLdsLoadBlockDescriptor()
+    {
+        using namespace ck_tile;
+        using VDataType = remove_cvref_t<typename Problem::VDataType>;
+
+        constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32
+        constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32
+        constexpr index_t kPad = kVLdsPadInBytes / sizeof(VDataType); // 32
+        constexpr index_t KPack = GetSmemVPackK<Problem>();           // 8
+
+        // Simple 2D naive layout matching Store, with vectorized K access
+        // Layout: [N, K/KPack, KPack] with stride [K+pad, KPack, 1]
+        constexpr auto v_lds_block_desc_0 = make_naive_tensor_descriptor(
+            make_tuple(number<kNPerBlock>{}, number<kKPerBlock / KPack>{}, number<KPack>{}),
+            make_tuple(number<kKPerBlock + kPad>{}, number<KPack>{}, number<1>{}),
+            number<KPack>{},
+            number<1>{});
+
+        // Merge K dimensions to get [N, K] logical view
+        constexpr auto v_lds_block_desc = transform_tensor_descriptor(
+            v_lds_block_desc_0,
+            make_tuple(
+                make_pass_through_transform(number<kNPerBlock>{}),
+                make_merge_transform(make_tuple(number<kKPerBlock / KPack>{}, number<KPack>{}))),
+            make_tuple(sequence<0>{}, sequence<1, 2>{}),
+            make_tuple(sequence<0>{}, sequence<1>{}));
+
+        return v_lds_block_desc;
+    }
+
+    // ========================================================================
+    // NOTE: P LDS redistribution is no longer needed!
+    // With BlockGemmARegBRegCRegV2FmhaWmma, GEMM1 accepts GEMM0 C distribution as A input.
+    // sp.p now has GEMM0 C distribution (same as sp_compute), so it can be passed
+    // directly to GEMM1 without LDS redistribution.
+    // ========================================================================
+
+    // ========================================================================
+    // SMEM size calculation - rewritten for wave32 layout
+    // ========================================================================
+
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr auto GetSingleSmemElementSpaceSize()
+    {
+        using namespace ck_tile;
+
+        // K LDS size
+        constexpr index_t SingleKSize = [&]() {
+            constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kN0;  // 32
+            constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kK0;  // 128
+            constexpr index_t NumWarps   = Problem::BlockFmhaShape::NumWarps;  // 8
+            constexpr index_t WarpSize   = 32;
+
+            constexpr index_t KVector = GetAlignmentK<Problem>();  // 2
+            constexpr index_t kPad = kKLdsPadInBytes / sizeof(typename Problem::KDataType);  // 8
+
+            constexpr index_t ElementsPerWarpK = WarpSize * KVector;  // 64
+            constexpr index_t KIssues = kKPerBlock / ElementsPerWarpK;  // 2
+            constexpr index_t NPerWarp = kNPerBlock / NumWarps;  // 4
+            constexpr index_t WarpKSliceWithPad = ElementsPerWarpK + kPad;  // 72
+
+            // Total: NPerWarp * NumWarps * KIssues * WarpKSliceWithPad
+            return NPerWarp * NumWarps * KIssues * WarpKSliceWithPad;  // 4 * 8 * 2 * 72 = 4608
+        }();
+
+        // V LDS size with simple 2D layout
+        constexpr index_t SingleVSize = [&]() {
+            using VDataType = remove_cvref_t<typename Problem::VDataType>;
+            constexpr index_t kNPerBlock = Problem::BlockFmhaShape::kK1;  // 32
+            constexpr index_t kKPerBlock = Problem::BlockFmhaShape::kN1;  // 32
+            constexpr index_t kPad = kVLdsPadInBytes / sizeof(VDataType); // 32
+
+            // Simple 2D layout: N rows × (K + pad) columns
+            return kNPerBlock * (kKPerBlock + kPad);  // 32 * 64 = 2048
+        }();
+
+        return max(SingleKSize, SingleVSize);
+    }
+
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetSmemSizeKV()
+    {
+        using namespace ck_tile;
+
+        // Use max of K and V single buffer size, then multiply by element size
+        static_assert(std::is_same_v<typename Problem::KDataType, typename Problem::VDataType>);
+        constexpr index_t kv_element_space_size_in_bytes =
+            GetSingleSmemElementSpaceSize<Problem>() * sizeof(typename Problem::KDataType);
+
+        return kv_element_space_size_in_bytes;
+    }
+
+    template <typename Problem>
+    CK_TILE_HOST_DEVICE static constexpr ck_tile::index_t GetSmemSize()
+    {
+        // 4 buffers: K double buffer (2) + V double buffer (2) + P redistribution buffer (1) + reduction buffer
+        // P LDS is needed to redistribute P from GEMM0 C layout to GEMM1 A layout
+        // Reduce LDS is needed for cross-warp reduction of rowsum_p and m
+        return 4 * GetSmemSizeKV<Problem>() + GetPLdsSize<Problem>() + GetReduceLdsSize<Problem>();
+    }
+};
+
+} // namespace ck_tile
+
