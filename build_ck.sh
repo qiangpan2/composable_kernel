@@ -12,9 +12,10 @@ cmake --build build -j 120 > build.log 2>&1
 
 ninja tile_example_fmha_fwd 2>&1 | tee failure.log
 
-tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=64 -prec=fp16 -v=1 -repeat=10
+tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=64 -prec=fp16 -v=1 -repeat=2
 tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=128 -prec=fp16 -v=1 -repeat=2 2>&1 | tee failure.log
-tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=256 -prec=fp16 -v=1 -repeat=10
+tile_example_fmha_fwd -b=4 -h=8 -s=1024 -d=256 -prec=fp16 -v=1 -repeat=2
+tile_example_fmha_fwd -b=1 -h=5 -s=75600 -d=128 -prec=fp16 -v=0 -repeat=2 #benchmark gfx12 141ms/249.716ms
 
 cmake --install build
 # Model Configuration:
