@@ -39,13 +39,4 @@ echo "Running new grouped convolution example (N=1, H=256, W=512, C=3, 5x5 kerne
 ./bin/tile_example_grouped_conv_fwd -n=1 -c=3 -d=1 -h=256 -w=512 -k=16 -z=1 -y=5 -x=5 -stride_d=1 -stride_h=1 -stride_w=1 -dilation_d=1 -dilation_h=1 -dilation_w=1 -lpad_d=0 -lpad_h=2 -lpad_w=2 -rpad_d=0 -rpad_h=2 -rpad_w=2 -g=1 -in_layout=NDHWGC -wei_layout=GKZYXC -out_layout=NDHWGK -prec=fp16 -v=1
 
 
-#FMHA
-cd example/ck_tile/01_fmha
-python generate.py \
-    --targets gfx1201 \
-    --api fwd \
-    --output_dir ./generated_kernels \
-    --receipt 1 \
-    --optdim 64,128
-
-ls -la generated_kernels/
+ls -la /opt/rocm/lib/libdevice*dl* 2>/dev/null || echo "No DL libs in /opt/rocm"
